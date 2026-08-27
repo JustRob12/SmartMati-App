@@ -1,3 +1,5 @@
-# Expo HAS CHANGED
+# Expo SDK 54 Configuration
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing any code.
+This project is configured for **Expo SDK 54** (`~54.0.37`) to maintain 100% compatibility with Expo Go 54.0.8.
+
+Documentation: https://docs.expo.dev/versions/v54.0.0/
