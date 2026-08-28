@@ -24,13 +24,32 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.smartmati.app"
+      "package": "com.smartmati.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font",
+      "expo-splash-screen",
+      "expo-system-ui",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "SmartMati allows you to select photos for resident profile verification and community reports."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "SmartMati uses your GPS location to accurately map civic issues, road hazards, and citizen reports in Mati City."
+        }
+      ]
     ],
     "extra": {
       "eas": {

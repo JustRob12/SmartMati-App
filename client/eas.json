@@ -16,7 +16,9 @@
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://lukxcysqwdlrttkxfrwb.supabase.co",
         "EXPO_PUBLIC_SUPABASE_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9",
+        "EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME": "uanwbqvg",
+        "EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET": "smartmati_preset"
       }
     },
     "production": {
@@ -27,7 +29,9 @@
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://lukxcysqwdlrttkxfrwb.supabase.co",
         "EXPO_PUBLIC_SUPABASE_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4ffaTeNq6Jp1eVj7F89k6g_KynHXIF9",
+        "EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME": "uanwbqvg",
+        "EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET": "smartmati_preset"
       }
     }
   },

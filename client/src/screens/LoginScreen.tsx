@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Dimensions,
@@ -17,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { CustomInput } from '../components/CustomInput';
 import { CityLogo } from '../components/CityLogo';
 import { RegisterModal } from './RegisterModal';
+import { ConfirmationModal, ConfirmationModalProps } from '../components/ConfirmationModal';
 import { THEME } from '../lib/constants';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -32,6 +32,7 @@ export const LoginScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [registerVisible, setRegisterVisible] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
 
   const validate = () => {
     const errs: { email?: string; password?: string } = {};
@@ -58,10 +59,26 @@ export const LoginScreen: React.FC = () => {
     try {
       const res = await signIn(email, password);
       if (res.error) {
-        Alert.alert('Login Failed', res.error);
+        setDialogConfig({
+          visible: true,
+          type: 'error',
+          icon: 'lock-closed-outline',
+          title: 'Sign In Failed',
+          subtitle: 'Authentication Error',
+          message: res.error,
+          confirmText: 'Try Again',
+          onConfirm: () => setDialogConfig(null),
+        });
       }
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Unable to sign in');
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Sign In Error',
+        message: e.message || 'Unable to connect to SmartMati services.',
+        confirmText: 'Dismiss',
+        onConfirm: () => setDialogConfig(null),
+      });
     } finally {
       setLoading(false);
     }
@@ -91,7 +108,7 @@ export const LoginScreen: React.FC = () => {
             <View style={styles.heroContent}>
               <Text style={styles.heroWelcome}>Welcome to</Text>
               <Text style={[styles.heroBrand, isSmallScreen && styles.heroBrandSmall]}>
-                Smart<Text style={styles.heroBrandAccent}>Mati</Text>
+                <Text style={styles.heroBrandAccent}>Smart</Text>Mati
               </Text>
               <Text style={[styles.heroTagline, isSmallScreen && styles.heroTaglineSmall]}>
                 Report non-emergency urban issues and help build a{' '}
@@ -232,6 +249,9 @@ export const LoginScreen: React.FC = () => {
           onClose={() => setRegisterVisible(false)}
           onSuccess={() => setRegisterVisible(false)}
         />
+
+        {/* Universal Dialog Modal */}
+        {dialogConfig && <ConfirmationModal {...dialogConfig} />}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

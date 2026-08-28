@@ -60,6 +60,7 @@ export interface UserProfile {
   barangay: Barangay | string;
   purok?: string;
   role?: string;
+  avatarUrl?: string;
   verificationStatus?: VerificationStatus;
   verificationRequestedAt?: string;
   createdAt?: string;

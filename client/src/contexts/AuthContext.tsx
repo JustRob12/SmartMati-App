@@ -12,6 +12,7 @@ interface AuthContextType {
   resendOtp: (email: string) => Promise<{ error?: string }>;
   requestVerification: () => Promise<{ error?: string }>;
   refreshProfile: () => Promise<UserProfile | null>;
+  updateAvatar: (avatarUrl: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   demoLogin: (
     email?: string,
@@ -54,22 +55,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     checkSession();
 
     // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        await fetchUserProfile(session.user.id, session.user.email || '');
-      } else {
-        setUser(null);
+    const authListener = supabase.auth.onAuthStateChange(async (event, session) => {
+      try {
+        if (session?.user) {
+          await fetchUserProfile(session.user.id, session.user.email || '');
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.warn('Auth state change error:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => {
-      subscription.unsubscribe();
+      authListener?.data?.subscription?.unsubscribe();
     };
   }, []);
 
   const fetchUserProfile = async (userId: string, email: string): Promise<UserProfile | null> => {
     try {
+      // 1. Check Supabase Auth user_metadata as fallback / multi-device source
+      let metaAvatar: string | undefined = undefined;
+      try {
+        const { data: authUserData } = await supabase.auth.getUser();
+        metaAvatar =
+          authUserData?.user?.user_metadata?.avatar_url ||
+          authUserData?.user?.user_metadata?.avatarUrl ||
+          undefined;
+      } catch (_) {}
+
+      // 2. Fetch profile record from public.profiles table
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -78,6 +95,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (error && error.code !== 'PGRST116') {
         console.warn('Error fetching profile from Supabase:', error);
+      }
+
+      const resolvedAvatar = data?.avatar_url || data?.avatarUrl || metaAvatar || undefined;
+
+      // Auto sync avatar into profiles table if present in auth metadata
+      if (metaAvatar && data && !data.avatar_url) {
+        supabase
+          .from('profiles')
+          .update({ avatar_url: metaAvatar, updated_at: new Date().toISOString() })
+          .eq('id', userId)
+          .then(() => {});
       }
 
       if (data) {
@@ -102,6 +130,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           barangay: data.barangay || 'Central (Poblacion)',
           purok: data.purok,
           role: data.role || 'resident',
+          avatarUrl: resolvedAvatar,
           verificationStatus: parsedStatus,
           verificationRequestedAt: data.verification_requested_at,
           createdAt: data.created_at,
@@ -117,6 +146,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           city: 'Mati City',
           barangay: 'Central (Poblacion)',
           role: 'resident',
+          avatarUrl: resolvedAvatar,
           verificationStatus: 'unverified',
         };
         setUser(fallbackObj);
@@ -194,6 +224,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err: any) {
       return { error: err?.message || 'Could not submit verification request.' };
     }
+  };
+
+  const updateAvatar = async (avatarUrl: string): Promise<{ error?: string }> => {
+    if (!user) return { error: 'No authenticated user found.' };
+
+    // 1. Optimistic React state update
+    setUser((prev) => (prev ? { ...prev, avatarUrl } : null));
+
+    if (isSupabaseConfigured) {
+      try {
+        // 2. Persist in Supabase Auth user_metadata so it syncs across all phones/sessions immediately
+        try {
+          await supabase.auth.updateUser({
+            data: { avatar_url: avatarUrl, avatarUrl },
+          });
+        } catch (authErr) {
+          console.warn('Auth user_metadata avatar update error:', authErr);
+        }
+
+        // 3. Persist in public.profiles table (upsert to ensure the row exists)
+        const { error } = await supabase
+          .from('profiles')
+          .upsert(
+            {
+              id: user.id,
+              email: user.email,
+              full_name: user.fullName,
+              avatar_url: avatarUrl,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'id' }
+          );
+
+        if (error) {
+          console.warn('Could not update avatar in Supabase profiles:', error);
+        }
+      } catch (err: any) {
+        console.warn('Avatar update error:', err);
+        return { error: err?.message || 'Avatar sync failed' };
+      }
+    }
+    return {};
   };
 
   const signIn = async (email: string, password: string): Promise<{ error?: string }> => {
@@ -423,6 +495,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resendOtp,
         requestVerification,
         refreshProfile,
+        updateAvatar,
         signOut,
         demoLogin,
         setDemoVerificationStatus,

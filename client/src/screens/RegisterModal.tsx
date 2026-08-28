@@ -7,7 +7,6 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   TextInput,
@@ -16,6 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { CustomInput } from '../components/CustomInput';
 import { DropdownModal } from '../components/DropdownModal';
 import { DatePickerModal } from '../components/DatePickerModal';
+import { TermsModal } from '../components/TermsModal';
+import { ConfirmationModal, ConfirmationModalProps } from '../components/ConfirmationModal';
 import { CaptchaChallenge, generateCaptchaCode } from '../components/CaptchaChallenge';
 import { StepperIndicator } from '../components/StepperIndicator';
 import { CityLogo } from '../components/CityLogo';
@@ -70,10 +71,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   // Errors State
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Modals for Selectors
+  // Sub-Modals
   const [genderModalVisible, setGenderModalVisible] = useState(false);
   const [barangayModalVisible, setBarangayModalVisible] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
+
+  // Custom Alert / Confirmation Dialog
+  const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
 
   // Refresh CAPTCHA code
   const refreshCaptcha = () => {
@@ -215,9 +220,16 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
     try {
       const res = await signUp(formData);
       if (res.error) {
-        Alert.alert('Registration Failed', res.error);
+        setDialogConfig({
+          visible: true,
+          type: 'error',
+          title: 'Registration Failed',
+          message: res.error,
+          confirmText: 'Try Again',
+          onConfirm: () => setDialogConfig(null),
+        });
       } else if (res.requiresEmailConfirmation) {
-        // Direct transition to 6-digit Email OTP Verification screen
+        // Transition to 6-digit Email OTP Verification
         setStep(5);
         setResendCooldown(60);
         setOtpCode('');
@@ -226,14 +238,29 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           otpInputRef.current?.focus();
         }, 350);
       } else {
-        Alert.alert(
-          'Account Created',
-          'Welcome to SmartMati! Your resident account is now ready.',
-          [{ text: 'Get Started', onPress: onSuccess }]
-        );
+        setDialogConfig({
+          visible: true,
+          type: 'success',
+          title: 'Account Created! 🎉',
+          subtitle: 'Welcome to SmartMati',
+          message: 'Your resident account is ready. You can now log in and report community issues.',
+          confirmText: 'Get Started',
+          onConfirm: () => {
+            setDialogConfig(null);
+            handleResetAndClose();
+            onSuccess();
+          },
+        });
       }
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Registration failed');
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Registration Error',
+        message: e.message || 'Unable to complete account registration.',
+        confirmText: 'Dismiss',
+        onConfirm: () => setDialogConfig(null),
+      });
     } finally {
       setLoading(false);
     }
@@ -253,19 +280,19 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
       if (res.error) {
         setOtpError(res.error || 'Invalid code. Please check the 6-digit code sent to your email.');
       } else {
-        Alert.alert(
-          'Email Verified!',
-          'Your SmartMati resident account is now verified and active.',
-          [
-            {
-              text: 'Go to Dashboard',
-              onPress: () => {
-                handleResetAndClose();
-                onSuccess();
-              },
-            },
-          ]
-        );
+        setDialogConfig({
+          visible: true,
+          type: 'success',
+          title: 'Email Verified! ✨',
+          subtitle: 'Account Activated',
+          message: 'Your SmartMati resident account is now verified and active.',
+          confirmText: 'Go to Dashboard',
+          onConfirm: () => {
+            setDialogConfig(null);
+            handleResetAndClose();
+            onSuccess();
+          },
+        });
       }
     } catch (e: any) {
       setOtpError(e.message || 'Error during email verification.');
@@ -282,13 +309,34 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
     try {
       const res = await resendOtp(formData.email);
       if (res.error) {
-        Alert.alert('Unable to Resend', res.error);
+        setDialogConfig({
+          visible: true,
+          type: 'warning',
+          title: 'Unable to Resend',
+          message: res.error,
+          confirmText: 'OK',
+          onConfirm: () => setDialogConfig(null),
+        });
       } else {
-        Alert.alert('Code Sent', `A new 6-digit confirmation code was sent to ${formData.email}`);
+        setDialogConfig({
+          visible: true,
+          type: 'info',
+          title: 'New Code Sent',
+          message: `A fresh 6-digit confirmation code was sent to ${formData.email}.`,
+          confirmText: 'Got It',
+          onConfirm: () => setDialogConfig(null),
+        });
         setResendCooldown(60);
       }
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not resend email code');
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Error',
+        message: e.message || 'Could not resend email code',
+        confirmText: 'OK',
+        onConfirm: () => setDialogConfig(null),
+      });
     } finally {
       setResending(false);
     }
@@ -307,8 +355,8 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   return (
     <Modal
       visible={visible}
-      animationType="none"
-      presentationStyle="pageSheet"
+      animationType="fade"
+      presentationStyle="fullScreen"
       onRequestClose={handleResetAndClose}
     >
       <KeyboardAvoidingView
@@ -330,14 +378,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           </TouchableOpacity>
           <Text style={styles.topBarTitle}>
             {step === 1
-              ? 'Step 1 of 4: Personal'
+              ? 'Step 1 of 4: Personal Details'
               : step === 2
-              ? 'Step 2 of 4: Address'
+              ? 'Step 2 of 4: Mati Address'
               : step === 3
-              ? 'Step 3 of 4: Security'
+              ? 'Step 3 of 4: Account Security'
               : step === 4
               ? 'Step 4 of 4: Verification'
-              : 'Email Verification'}
+              : 'Email Confirmation'}
           </Text>
           <View style={{ width: 36 }} />
         </View>
@@ -347,14 +395,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Brand Seal Header (Shown on Steps 1 to 4) */}
+          {/* Brand Seal Header (Steps 1 to 4) */}
           {step <= 4 && (
             <>
               <View style={styles.headerHero}>
                 <CityLogo size="sm" />
                 <Text style={styles.mainTitle}>Create Account</Text>
                 <Text style={styles.subTitle}>
-                  Join <Text style={styles.brandName}>SmartMati</Text> to report and monitor urban issues.
+                  Join <Text style={styles.brandName}><Text style={styles.brandAccent}>Smart</Text>Mati</Text> to report and monitor urban issues.
                 </Text>
               </View>
 
@@ -365,7 +413,12 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
           {/* Step 1: Personal Info */}
           {step === 1 && (
-            <View style={styles.stepContainer}>
+            <View style={styles.stepCard}>
+              <View style={styles.stepCardHeader}>
+                <Ionicons name="person-circle-outline" size={20} color={THEME.colors.primary} />
+                <Text style={styles.stepCardTitle}>Personal Information</Text>
+              </View>
+
               <CustomInput
                 label="Full Name"
                 placeholder="e.g. Juan P. Dela Cruz"
@@ -386,7 +439,6 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 required
               />
 
-              {/* Calendar Date Picker Input */}
               <CustomInput
                 label="Birthdate"
                 placeholder="Select your date of birth"
@@ -398,7 +450,6 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 required
               />
 
-              {/* Mobile Phone Number */}
               <CustomInput
                 label="Mobile Phone Number"
                 placeholder="e.g. 09171234567"
@@ -428,7 +479,12 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
           {/* Step 2: Address Info */}
           {step === 2 && (
-            <View style={styles.stepContainer}>
+            <View style={styles.stepCard}>
+              <View style={styles.stepCardHeader}>
+                <Ionicons name="location" size={20} color={THEME.colors.accent} />
+                <Text style={styles.stepCardTitle}>Mati Residence Location</Text>
+              </View>
+
               {/* City (Auto locked to Mati City) */}
               <View style={styles.fixedCityContainer}>
                 <Text style={styles.fieldLabel}>City / Municipality</Text>
@@ -443,7 +499,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                   </View>
                 </View>
                 <Text style={styles.cityHelperText}>
-                  This portal is dedicated for residents and visitors of the City of Mati.
+                  This portal is dedicated for residents and constituents of the City of Mati.
                 </Text>
               </View>
 
@@ -475,7 +531,12 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
           {/* Step 3: Security & Terms */}
           {step === 3 && (
-            <View style={styles.stepContainer}>
+            <View style={styles.stepCard}>
+              <View style={styles.stepCardHeader}>
+                <Ionicons name="lock-closed" size={20} color={THEME.colors.primary} />
+                <Text style={styles.stepCardTitle}>Account Security</Text>
+              </View>
+
               <CustomInput
                 label="Password"
                 placeholder="Create a strong password (min 6 chars)"
@@ -515,11 +576,25 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                     <Ionicons name="checkmark" size={16} color={THEME.colors.white} />
                   )}
                 </View>
-                <Text style={styles.checkboxLabel}>
-                  I agree to the{' '}
-                  <Text style={styles.linkText}>Terms of Service</Text> and{' '}
-                  <Text style={styles.linkText}>Privacy Policy</Text> of Mati City.
-                </Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkboxLabel}>
+                    I agree to the{' '}
+                    <Text
+                      style={styles.linkText}
+                      onPress={() => setTermsModalVisible(true)}
+                    >
+                      Terms of Service
+                    </Text>{' '}
+                    and{' '}
+                    <Text
+                      style={styles.linkText}
+                      onPress={() => setTermsModalVisible(true)}
+                    >
+                      Privacy Policy
+                    </Text>{' '}
+                    of Mati City.
+                  </Text>
+                </View>
               </TouchableOpacity>
               {errors.agreeToTerms && (
                 <Text style={styles.termsErrorText}>{errors.agreeToTerms}</Text>
@@ -527,14 +602,38 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
             </View>
           )}
 
-          {/* Step 4: Security CAPTCHA Challenge */}
+          {/* Step 4: Resident Verification & Review */}
           {step === 4 && (
-            <View style={styles.stepContainer}>
-              <View style={styles.captchaHeaderBadge}>
+            <View style={styles.stepCard}>
+              <View style={styles.stepCardHeader}>
                 <Ionicons name="shield-checkmark" size={20} color={THEME.colors.primary} />
-                <Text style={styles.captchaHeaderBadgeText}>Anti-Bot Resident Verification</Text>
+                <Text style={styles.stepCardTitle}>Review & Verification</Text>
               </View>
 
+              {/* Resident Summary Card */}
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryTitle}>Resident Profile Summary</Text>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Name:</Text>
+                  <Text style={styles.summaryValue}>{formData.fullName}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Location:</Text>
+                  <Text style={styles.summaryValue}>
+                    {formData.purok}, Brgy. {formData.barangay}, Mati
+                  </Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Email:</Text>
+                  <Text style={styles.summaryValue}>{formData.email}</Text>
+                </View>
+                <View style={[styles.summaryRow, { borderBottomWidth: 0 }]}>
+                  <Text style={styles.summaryLabel}>Phone:</Text>
+                  <Text style={styles.summaryValue}>{formData.phone}</Text>
+                </View>
+              </View>
+
+              {/* Security CAPTCHA Challenge */}
               <CaptchaChallenge
                 captchaCode={captchaCode}
                 value={userCaptchaInput}
@@ -550,8 +649,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
           {/* Step 5: Email 6-Digit OTP Verification (if required) */}
           {step === 5 && (
-            <View style={styles.otpContainer}>
-              {/* Mail Badge */}
+            <View style={styles.otpCard}>
               <View style={styles.otpIconBadge}>
                 <Ionicons name="mail-unread-outline" size={40} color={THEME.colors.primary} />
                 <View style={styles.otpKeyDot}>
@@ -690,7 +788,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                   ) : (
                     <>
                       <Ionicons name="person-add" size={18} color={THEME.colors.white} />
-                      <Text style={styles.primaryButtonText}>Verify & Complete Account</Text>
+                      <Text style={styles.primaryButtonText}>Create & Submit Account</Text>
                     </>
                   )}
                 </TouchableOpacity>
@@ -717,7 +815,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           )}
         </ScrollView>
 
-        {/* Calendar Date Picker Modal */}
+        {/* Sub-Modals */}
         <DatePickerModal
           visible={datePickerVisible}
           selectedDate={formData.birthdate}
@@ -725,7 +823,6 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           onClose={() => setDatePickerVisible(false)}
         />
 
-        {/* Gender Dropdown Modal */}
         <DropdownModal
           visible={genderModalVisible}
           title="Select Gender"
@@ -736,7 +833,6 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           searchable={false}
         />
 
-        {/* Barangay Dropdown Modal */}
         <DropdownModal
           visible={barangayModalVisible}
           title="Select Barangay in Mati City"
@@ -746,6 +842,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           onClose={() => setBarangayModalVisible(false)}
           searchable={true}
         />
+
+        <TermsModal
+          visible={termsModalVisible}
+          onClose={() => setTermsModalVisible(false)}
+        />
+
+        {/* Universal Dialog Modal */}
+        {dialogConfig && <ConfirmationModal {...dialogConfig} />}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -754,44 +858,48 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.white,
+    backgroundColor: '#F8FAFC',
   },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 10,
+    paddingTop: Platform.OS === 'ios' ? 50 : 16,
+    paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.border,
+    borderBottomColor: '#E2E8F0',
     backgroundColor: THEME.colors.white,
   },
   navButton: {
-    padding: 6,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   topBarTitle: {
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
     color: THEME.colors.primary,
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 36,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 40,
   },
   headerHero: {
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   mainTitle: {
-    fontSize: 20,
-    fontWeight: '800',
+    fontSize: 22,
+    fontWeight: '900',
     color: THEME.colors.textPrimary,
     marginTop: 6,
-    letterSpacing: -0.3,
+    letterSpacing: -0.5,
   },
   subTitle: {
     fontSize: 12,
@@ -802,57 +910,103 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   brandName: {
-    fontWeight: '700',
+    fontWeight: '800',
     color: THEME.colors.primary,
   },
-  stepContainer: {
-    marginTop: 6,
+  brandAccent: {
+    color: THEME.colors.accent,
   },
-  captchaHeaderBadge: {
+  stepCard: {
+    backgroundColor: THEME.colors.white,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 6,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  stepCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.colors.primarySoft,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-    borderRadius: THEME.borderRadius.md,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginBottom: 14,
     gap: 8,
+    marginBottom: 14,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
-  captchaHeaderBadgeText: {
+  stepCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+  },
+  summaryCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  summaryTitle: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     color: THEME.colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F6',
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  summaryValue: {
+    fontSize: 12,
+    color: '#0F172A',
+    fontWeight: '700',
+    maxWidth: '65%',
   },
   fixedCityContainer: {
     marginBottom: 14,
   },
   fieldLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: THEME.colors.textPrimary,
-    marginBottom: 6,
+    marginBottom: 5,
   },
   fixedCityBox: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: THEME.colors.surface,
-    borderWidth: 1.2,
+    borderWidth: 1,
     borderColor: THEME.colors.border,
     borderRadius: THEME.borderRadius.md,
-    height: 48,
-    paddingHorizontal: 14,
+    height: 46,
+    paddingHorizontal: 12,
   },
   cityLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   fixedCityText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: THEME.colors.textPrimary,
   },
   matiBadge: {
@@ -878,20 +1032,20 @@ const styles = StyleSheet.create({
   checkboxContainer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginTop: 4,
+    marginTop: 6,
     marginBottom: 6,
   },
   checkboxBox: {
-    width: 19,
-    height: 19,
-    borderRadius: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 5,
     borderWidth: 1.6,
     borderColor: THEME.colors.textMuted,
     backgroundColor: THEME.colors.white,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 9,
-    marginTop: 2,
+    marginRight: 10,
+    marginTop: 1,
   },
   checkboxBoxChecked: {
     backgroundColor: THEME.colors.primary,
@@ -901,25 +1055,25 @@ const styles = StyleSheet.create({
     borderColor: THEME.colors.error,
   },
   checkboxLabel: {
-    flex: 1,
     fontSize: 12,
     color: THEME.colors.textSecondary,
     lineHeight: 18,
   },
   linkText: {
     color: THEME.colors.primaryLight,
-    fontWeight: '600',
+    fontWeight: '700',
     textDecorationLine: 'underline',
   },
   termsErrorText: {
-    fontSize: 12,
+    fontSize: 11,
     color: THEME.colors.error,
     marginBottom: 6,
     paddingHorizontal: 2,
+    fontWeight: '500',
   },
   footerActions: {
     marginTop: 16,
-    gap: 10,
+    gap: 8,
   },
   primaryButton: {
     backgroundColor: THEME.colors.primary,
@@ -927,13 +1081,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 48,
-    borderRadius: THEME.borderRadius.md,
+    borderRadius: 14,
     gap: 8,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
   },
   primaryButtonText: {
     color: THEME.colors.white,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   buttonDisabled: {
     opacity: 0.65,
@@ -941,18 +1101,20 @@ const styles = StyleSheet.create({
   secondaryButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: 40,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
   },
   secondaryButtonText: {
-    color: THEME.colors.textSecondary,
+    color: '#475569',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   loginRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 6,
+    marginTop: 8,
   },
   loginPrompt: {
     fontSize: 13,
@@ -960,15 +1122,19 @@ const styles = StyleSheet.create({
   },
   loginLink: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '800',
     color: THEME.colors.primary,
   },
 
   // OTP Step Styles (Step 5)
-  otpContainer: {
+  otpCard: {
+    backgroundColor: THEME.colors.white,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 24,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     alignItems: 'center',
-    paddingTop: 12,
-    paddingHorizontal: 4,
   },
   otpIconBadge: {
     width: 72,
@@ -1010,12 +1176,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: THEME.colors.surface,
-    paddingVertical: 5,
-    paddingHorizontal: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
     borderRadius: THEME.borderRadius.full,
     gap: 6,
     marginTop: 8,
-    marginBottom: 18,
+    marginBottom: 20,
     borderWidth: 1,
     borderColor: THEME.colors.border,
   },
@@ -1034,7 +1200,7 @@ const styles = StyleSheet.create({
   otpBox: {
     width: 44,
     height: 52,
-    borderRadius: THEME.borderRadius.md,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderColor: THEME.colors.border,
     backgroundColor: THEME.colors.white,
@@ -1111,6 +1277,6 @@ const styles = StyleSheet.create({
   changeEmailText: {
     fontSize: 12,
     color: THEME.colors.textSecondary,
-    fontWeight: '500',
+    fontWeight: '600',
   },
 });

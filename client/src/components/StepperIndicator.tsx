@@ -3,22 +3,29 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../lib/constants';
 
-interface StepperIndicatorProps {
-  currentStep: number; // 1, 2, 3, 4
-  totalSteps?: number;
+export interface StepItem {
+  number: number;
+  title: string;
+  icon?: keyof typeof Ionicons.glyphMap;
 }
+
+interface StepperIndicatorProps {
+  currentStep: number; // 1, 2, 3, etc.
+  totalSteps?: number;
+  steps?: StepItem[];
+}
+
+const DEFAULT_REGISTRATION_STEPS: StepItem[] = [
+  { number: 1, title: 'Personal' },
+  { number: 2, title: 'Address' },
+  { number: 3, title: 'Security' },
+  { number: 4, title: 'CAPTCHA' },
+];
 
 export const StepperIndicator: React.FC<StepperIndicatorProps> = ({
   currentStep,
-  totalSteps = 4,
+  steps = DEFAULT_REGISTRATION_STEPS,
 }) => {
-  const steps = [
-    { number: 1, title: 'Personal' },
-    { number: 2, title: 'Address' },
-    { number: 3, title: 'Security' },
-    { number: 4, title: 'CAPTCHA' },
-  ];
-
   return (
     <View style={styles.container}>
       <View style={styles.stepsRow}>
@@ -29,7 +36,7 @@ export const StepperIndicator: React.FC<StepperIndicatorProps> = ({
           return (
             <React.Fragment key={step.number}>
               {/* Step Circle & Label */}
-              <View style={styles.stepItem}>
+              <View style={[styles.stepItem, { width: Math.max(54, Math.floor(300 / steps.length)) }]}>
                 <View
                   style={[
                     styles.circle,
@@ -38,7 +45,13 @@ export const StepperIndicator: React.FC<StepperIndicatorProps> = ({
                   ]}
                 >
                   {isCompleted ? (
-                    <Ionicons name="checkmark" size={14} color={THEME.colors.white} />
+                    <Ionicons name="checkmark" size={13} color={THEME.colors.white} />
+                  ) : step.icon ? (
+                    <Ionicons
+                      name={step.icon}
+                      size={13}
+                      color={isActive ? THEME.colors.white : THEME.colors.textSecondary}
+                    />
                   ) : (
                     <Text
                       style={[
@@ -82,8 +95,8 @@ export const StepperIndicator: React.FC<StepperIndicatorProps> = ({
 const styles = StyleSheet.create({
   container: {
     paddingVertical: 10,
-    paddingHorizontal: 4,
-    marginBottom: 6,
+    paddingHorizontal: 8,
+    marginBottom: 4,
   },
   stepsRow: {
     flexDirection: 'row',
@@ -92,7 +105,6 @@ const styles = StyleSheet.create({
   },
   stepItem: {
     alignItems: 'center',
-    width: 62,
   },
   circle: {
     width: 28,
@@ -140,7 +152,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 2,
     backgroundColor: THEME.colors.border,
-    marginHorizontal: 2,
+    marginHorizontal: 4,
     marginBottom: 14,
   },
   connectorCompleted: {
