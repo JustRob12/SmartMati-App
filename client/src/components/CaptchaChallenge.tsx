@@ -5,6 +5,7 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../lib/constants';
@@ -202,7 +203,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   charText: {
-    fontFamily: 'Courier',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontSize: 26,
     fontWeight: '900',
     letterSpacing: 4,
