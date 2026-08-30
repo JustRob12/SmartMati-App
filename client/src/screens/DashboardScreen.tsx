@@ -395,13 +395,6 @@ export const DashboardScreen: React.FC = () => {
                     City Government of Mati • Public Services
                   </Text>
                 </View>
-
-                <View style={styles.residentStatusBadge}>
-                  <View style={styles.statusLiveDot} />
-                  <Text style={styles.residentStatusText} numberOfLines={1}>
-                    {user?.barangay ? `Brgy. ${user.barangay}` : 'Mati City'}
-                  </Text>
-                </View>
               </View>
 
               {/* Action Buttons Row */}

@@ -610,6 +610,7 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
             image_url: hostedImageUrl,
             latitude: finalLatitude,
             longitude: finalLongitude,
+            resident_avatar: user?.avatarUrl || editReport.resident_avatar || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editReport.id)
@@ -648,6 +649,7 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
           resident_name: user?.fullName || 'Verified Resident',
           resident_phone: user?.phone || null,
           resident_email: user?.email || null,
+          resident_avatar: user?.avatarUrl || null,
           barangay: finalBarangay,
           category: selectedCategory.name,
           office_name: selectedCategory.officeName,

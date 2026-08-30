@@ -8,13 +8,17 @@ import {
   StyleSheet,
   ActivityIndicator,
   Platform,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { THEME } from '../lib/constants';
 import { useAuth } from '../contexts/AuthContext';
-import { pickAndCropAvatar, uploadImageToCloudinary } from '../lib/cloudinary';
+import {
+  pickAvatarFromGallery,
+  takeAvatarWithCamera,
+  uploadImageToCloudinary,
+} from '../lib/cloudinary';
 import { ConfirmationModal, ConfirmationModalProps } from '../components/ConfirmationModal';
 
 interface ProfileScreenProps {
@@ -31,6 +35,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
   } = useAuth();
 
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [photoOptionsVisible, setPhotoOptionsVisible] = useState(false);
   const [submittingVerification, setSubmittingVerification] = useState(false);
   const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
 
@@ -38,13 +43,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
   const isApproved = verificationStatus === 'approved';
   const isPending = verificationStatus === 'pending';
 
-  const handlePickAndUploadAvatar = async () => {
+  const processAvatarUpload = async (imageUri: string) => {
+    setPhotoOptionsVisible(false);
+    setUploadingAvatar(true);
     try {
-      const croppedUri = await pickAndCropAvatar();
-      if (!croppedUri) return;
-
-      setUploadingAvatar(true);
-      const hostedUrl = await uploadImageToCloudinary(croppedUri, 'smartmati_avatars');
+      const hostedUrl = await uploadImageToCloudinary(imageUri, 'smartmati_avatars');
       const res = await updateAvatar(hostedUrl);
 
       if (res?.error) {
@@ -55,21 +58,60 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
         visible: true,
         type: 'success',
         title: 'Profile Photo Updated! 📸',
-        message: 'Your new resident avatar has been uploaded and saved across your account.',
+        message: 'Your new resident avatar has been uploaded to Cloudinary and saved across your account.',
         confirmText: 'Awesome',
         onConfirm: () => setDialogConfig(null),
       });
     } catch (err: any) {
+      console.error('Avatar upload failure:', err);
       setDialogConfig({
         visible: true,
         type: 'error',
         title: 'Upload Failed',
-        message: err.message || 'Could not upload profile picture.',
+        message: err.message || 'Could not upload profile picture. Please check your internet connection and try again.',
         confirmText: 'Dismiss',
         onConfirm: () => setDialogConfig(null),
       });
     } finally {
       setUploadingAvatar(false);
+    }
+  };
+
+  const handleChooseFromGallery = async () => {
+    setPhotoOptionsVisible(false);
+    try {
+      const uri = await pickAvatarFromGallery();
+      if (uri) {
+        await processAvatarUpload(uri);
+      }
+    } catch (err: any) {
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Gallery Access',
+        message: err.message || 'Could not select photo from gallery.',
+        confirmText: 'OK',
+        onConfirm: () => setDialogConfig(null),
+      });
+    }
+  };
+
+  const handleTakePhotoWithCamera = async () => {
+    setPhotoOptionsVisible(false);
+    try {
+      const uri = await takeAvatarWithCamera();
+      if (uri) {
+        await processAvatarUpload(uri);
+      }
+    } catch (err: any) {
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Camera Access',
+        message: err.message || 'Could not open camera.',
+        confirmText: 'OK',
+        onConfirm: () => setDialogConfig(null),
+      });
     }
   };
 
@@ -172,9 +214,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
       >
         {/* Avatar & Hero Card */}
         <View style={styles.avatarCard}>
-          <View style={styles.avatarContainer}>
+          <TouchableOpacity
+            style={styles.avatarContainer}
+            onPress={() => setPhotoOptionsVisible(true)}
+            activeOpacity={0.85}
+            disabled={uploadingAvatar}
+          >
             {user?.avatarUrl ? (
-              <Image source={{ uri: user.avatarUrl }} style={styles.avatarImage} />
+              <Image source={{ uri: user.avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Ionicons name="person" size={48} color={THEME.colors.primary} />
@@ -189,15 +236,29 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
             )}
 
             {/* Camera / Edit Badge */}
-            <TouchableOpacity
-              style={styles.cameraBadge}
-              onPress={handlePickAndUploadAvatar}
-              disabled={uploadingAvatar}
-              activeOpacity={0.8}
-            >
+            <View style={styles.cameraBadge}>
               <Ionicons name="camera" size={16} color={THEME.colors.white} />
-            </TouchableOpacity>
-          </View>
+            </View>
+          </TouchableOpacity>
+
+          {/* Change Photo Button */}
+          <TouchableOpacity
+            style={styles.changePhotoBtn}
+            onPress={() => setPhotoOptionsVisible(true)}
+            disabled={uploadingAvatar}
+            activeOpacity={0.75}
+          >
+            {uploadingAvatar ? (
+              <ActivityIndicator size="small" color={THEME.colors.primary} />
+            ) : (
+              <>
+                <Ionicons name="camera-outline" size={15} color={THEME.colors.primary} />
+                <Text style={styles.changePhotoBtnText}>
+                  {user?.avatarUrl ? 'Change Profile Photo' : 'Upload Profile Photo'}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
 
           <Text style={styles.userName}>{user?.fullName || 'Mati Resident'}</Text>
           <Text style={styles.userEmail}>{user?.email}</Text>
@@ -318,35 +379,55 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
               <Ionicons name="call-outline" size={16} color={THEME.colors.primary} />
             </View>
             <View style={styles.infoTexts}>
-              <Text style={styles.infoLabel}>Mobile Number</Text>
+              <Text style={styles.infoLabel}>Contact Number</Text>
               <Text style={styles.infoValue}>{user?.phone || 'Not specified'}</Text>
             </View>
           </View>
 
           <View style={styles.infoRow}>
             <View style={styles.iconTag}>
-              <Ionicons name="location-outline" size={16} color={THEME.colors.accent} />
+              <Ionicons name="mail-outline" size={16} color={THEME.colors.primary} />
             </View>
             <View style={styles.infoTexts}>
-              <Text style={styles.infoLabel}>Resident Barangay</Text>
-              <Text style={styles.infoValue}>Brgy. {user?.barangay || 'Central'}, Mati City</Text>
+              <Text style={styles.infoLabel}>Email Address</Text>
+              <Text style={styles.infoValue}>{user?.email || '—'}</Text>
             </View>
           </View>
 
-          {user?.purok ? (
-            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-              <View style={styles.iconTag}>
-                <Ionicons name="home-outline" size={16} color={THEME.colors.accent} />
-              </View>
-              <View style={styles.infoTexts}>
-                <Text style={styles.infoLabel}>Purok / Street</Text>
-                <Text style={styles.infoValue}>{user.purok}</Text>
-              </View>
+          <View style={styles.infoRow}>
+            <View style={styles.iconTag}>
+              <Ionicons name="location-outline" size={16} color={THEME.colors.primary} />
             </View>
-          ) : null}
+            <View style={styles.infoTexts}>
+              <Text style={styles.infoLabel}>City / Municipality</Text>
+              <Text style={styles.infoValue}>{user?.city || 'Mati City'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconTag}>
+              <Ionicons name="navigate-outline" size={16} color={THEME.colors.primary} />
+            </View>
+            <View style={styles.infoTexts}>
+              <Text style={styles.infoLabel}>Barangay</Text>
+              <Text style={styles.infoValue}>
+                {user?.barangay ? `Brgy. ${user.barangay}` : 'Not specified'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+            <View style={styles.iconTag}>
+              <Ionicons name="home-outline" size={16} color={THEME.colors.primary} />
+            </View>
+            <View style={styles.infoTexts}>
+              <Text style={styles.infoLabel}>Purok / Street / Sitio</Text>
+              <Text style={styles.infoValue}>{user?.purok || 'Not specified'}</Text>
+            </View>
+          </View>
         </View>
 
-        {/* Log Out Button */}
+        {/* Sign Out Button */}
         <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
@@ -357,8 +438,77 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Confirmation Dialog */}
-      {dialogConfig && <ConfirmationModal {...dialogConfig} />}
+      {/* PHOTO PICKER OPTIONS MODAL */}
+      <Modal
+        visible={photoOptionsVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setPhotoOptionsVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setPhotoOptionsVisible(false)}
+        >
+          <View style={styles.photoOptionsSheet} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Profile Photo</Text>
+            <Text style={styles.modalSubtitle}>Choose an option to update your picture</Text>
+
+            <TouchableOpacity
+              style={styles.optionBtn}
+              onPress={handleTakePhotoWithCamera}
+              activeOpacity={0.7}
+            >
+              <View style={styles.optionIconCircle}>
+                <Ionicons name="camera" size={20} color={THEME.colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionBtnTitle}>Take Photo</Text>
+                <Text style={styles.optionBtnDesc}>Use camera to take a new portrait</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.optionBtn}
+              onPress={handleChooseFromGallery}
+              activeOpacity={0.7}
+            >
+              <View style={styles.optionIconCircle}>
+                <Ionicons name="images" size={20} color={THEME.colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionBtnTitle}>Choose from Gallery</Text>
+                <Text style={styles.optionBtnDesc}>Select an existing photo from library</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cancelOptionBtn}
+              onPress={() => setPhotoOptionsVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.cancelOptionBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Confirmation & Alert Modals */}
+      {dialogConfig && (
+        <ConfirmationModal
+          {...dialogConfig}
+          onConfirm={() => {
+            if (dialogConfig.onConfirm) dialogConfig.onConfirm();
+          }}
+          onCancel={() => {
+            if (dialogConfig.onCancel) dialogConfig.onCancel();
+            else setDialogConfig(null);
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 };
@@ -366,7 +516,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: THEME.colors.background,
   },
   topHeader: {
     flexDirection: 'row',
@@ -387,13 +537,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     color: THEME.colors.textPrimary,
   },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    padding: 16,
     paddingBottom: 40,
   },
   avatarCard: {
@@ -404,33 +553,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 2,
     marginBottom: 16,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 14,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    marginBottom: 8,
   },
   avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 3,
-    borderColor: THEME.colors.primarySoft,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
   },
   avatarPlaceholder: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: THEME.colors.primarySoft,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#DBEAFE',
+    borderWidth: 2,
+    borderColor: '#BFDBFE',
   },
   uploadOverlay: {
     position: 'absolute',
@@ -438,63 +588,74 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: 48,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 52,
     alignItems: 'center',
     justifyContent: 'center',
   },
   cameraBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: 2,
+    right: 2,
+    backgroundColor: THEME.colors.primary,
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: THEME.colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: 2.5,
     borderColor: THEME.colors.white,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
+    elevation: 3,
+  },
+  changePhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginBottom: 12,
+  },
+  changePhotoBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: THEME.colors.primary,
   },
   userName: {
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '900',
     color: THEME.colors.textPrimary,
-    letterSpacing: -0.3,
+    textAlign: 'center',
   },
   userEmail: {
-    fontSize: 13,
+    fontSize: 12.5,
     color: THEME.colors.textSecondary,
     marginTop: 2,
+    marginBottom: 12,
   },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: THEME.borderRadius.full,
-    marginTop: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
   },
   statusPillApproved: {
     backgroundColor: '#ECFDF5',
-    borderWidth: 1,
     borderColor: '#A7F3D0',
   },
   statusPillPending: {
     backgroundColor: '#FFFBEB',
-    borderWidth: 1,
     borderColor: '#FDE68A',
   },
   statusPillUnverified: {
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
   },
   statusText: {
     fontSize: 12,
@@ -614,5 +775,80 @@ const styles = StyleSheet.create({
     color: THEME.colors.error,
     fontSize: 14,
     fontWeight: '800',
+  },
+
+  // PHOTO OPTIONS MODAL STYLES
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'flex-end',
+  },
+  photoOptionsSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 36,
+    gap: 10,
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  optionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    padding: 12,
+    gap: 12,
+  },
+  optionIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionBtnTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  optionBtnDesc: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  cancelOptionBtn: {
+    marginTop: 6,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelOptionBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#475569',
   },
 });

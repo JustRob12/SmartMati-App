@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
+  FlatList,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
@@ -10,9 +11,10 @@ import {
   ActivityIndicator,
   Modal,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../lib/constants';
+import { THEME, getDefaultCitizenAvatar } from '../lib/constants';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { CivicReport, ReportPriority, ReportStatus } from '../types/report';
@@ -55,6 +57,36 @@ const FEED_CATEGORIES: { name: string; icon: string }[] = [
   { name: 'Centralized & Public Order', icon: 'business-outline' },
 ];
 
+// Curated pastel palettes for deterministic fallback avatars
+const AVATAR_PALETTES = [
+  { bg: '#EFF6FF', text: '#1D4ED8', border: '#BFDBFE' }, // Blue
+  { bg: '#F0FDF4', text: '#15803D', border: '#BBF7D0' }, // Green
+  { bg: '#FFFBEB', text: '#B45309', border: '#FDE68A' }, // Amber
+  { bg: '#FDF2F8', text: '#BE185D', border: '#FBCFE8' }, // Pink
+  { bg: '#F5F3FF', text: '#6D28D9', border: '#DDD6FE' }, // Purple
+  { bg: '#ECFEFF', text: '#0E7490', border: '#A5F3FC' }, // Cyan
+  { bg: '#FEF2F2', text: '#B91C1C', border: '#FECACA' }, // Red
+  { bg: '#F0FDFA', text: '#0F766E', border: '#99F6E4' }, // Teal
+];
+
+export const getAvatarPalette = (name: string) => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % AVATAR_PALETTES.length;
+  return AVATAR_PALETTES[index];
+};
+
+export const getAuthorInitials = (name: string): string => {
+  if (!name) return 'M';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
 // Robust normalizer for report status regardless of spaces, underscores, or casing
 export const normalizeReportStatus = (
   rawStatus?: string
@@ -91,6 +123,377 @@ export const parseReportImages = (imageUrl?: string | null): string[] => {
   return [trimmed];
 };
 
+// Helper for relative time (Facebook style)
+export const formatTimeAgo = (dateString?: string) => {
+  if (!dateString) return 'Just now';
+  const now = new Date();
+  const date = new Date(dateString);
+  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+  if (diffInSeconds < 60) return 'Just now';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+  if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+export interface AuthorProfileModalData {
+  name: string;
+  avatarUrl?: string;
+  barangay?: string;
+  city?: string;
+  verificationStatus?: string;
+  userId?: string;
+  totalReports?: number;
+}
+
+// =========================================================================
+// MEMOIZED AUTHOR AVATAR WITH USER PLACEHOLDER ICON
+// =========================================================================
+interface AuthorAvatarProps {
+  avatarUrl?: string;
+  authorName?: string;
+  size?: number;
+}
+
+const AuthorAvatar: React.FC<AuthorAvatarProps> = React.memo(({ avatarUrl, size = 42 }) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [avatarUrl]);
+
+  const hasPhoto = !!avatarUrl && avatarUrl.trim().length > 0 && !imageFailed;
+
+  return (
+    <View
+      style={[
+        styles.authorAvatarWrapper,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: '#EFF6FF',
+          borderColor: '#BFDBFE',
+        },
+      ]}
+    >
+      {hasPhoto ? (
+        <Image
+          source={{ uri: avatarUrl!.trim() }}
+          style={{ width: size, height: size, borderRadius: size / 2 }}
+          resizeMode="cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <Ionicons name="person" size={Math.round(size * 0.52)} color={THEME.colors.primary} />
+      )}
+    </View>
+  );
+});
+
+// =========================================================================
+// MEMOIZED FACEBOOK-STYLE PHOTO GRID
+// =========================================================================
+interface PostImageGridProps {
+  imageUrl?: string | null;
+  onOpenLightbox: (images: string[], index: number) => void;
+}
+
+const PostImageGrid: React.FC<PostImageGridProps> = React.memo(({ imageUrl, onOpenLightbox }) => {
+  const images = useMemo(() => parseReportImages(imageUrl), [imageUrl]);
+
+  if (images.length === 0) return null;
+
+  if (images.length === 1) {
+    return (
+      <TouchableOpacity
+        activeOpacity={0.94}
+        onPress={() => onOpenLightbox(images, 0)}
+        style={styles.singleImageContainer}
+      >
+        <Image source={{ uri: images[0] }} style={styles.singleImage} resizeMode="cover" />
+      </TouchableOpacity>
+    );
+  }
+
+  if (images.length === 2) {
+    return (
+      <View style={styles.twoImageGrid}>
+        {images.map((uri, idx) => (
+          <TouchableOpacity
+            key={idx}
+            activeOpacity={0.92}
+            onPress={() => onOpenLightbox(images, idx)}
+            style={styles.twoImageItem}
+          >
+            <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  }
+
+  if (images.length === 3) {
+    return (
+      <View style={styles.threeImageGrid}>
+        <TouchableOpacity
+          activeOpacity={0.92}
+          onPress={() => onOpenLightbox(images, 0)}
+          style={styles.threeImageLarge}
+        >
+          <Image source={{ uri: images[0] }} style={styles.gridImage} resizeMode="cover" />
+        </TouchableOpacity>
+        <View style={styles.threeImageStackedCol}>
+          {images.slice(1, 3).map((uri, idx) => (
+            <TouchableOpacity
+              key={idx + 1}
+              activeOpacity={0.92}
+              onPress={() => onOpenLightbox(images, idx + 1)}
+              style={styles.threeImageStackedItem}
+            >
+              <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  // 4 Images (2 x 2 Facebook Grid)
+  return (
+    <View style={styles.fourImageGrid}>
+      {images.slice(0, 4).map((uri, idx) => (
+        <TouchableOpacity
+          key={idx}
+          activeOpacity={0.92}
+          onPress={() => onOpenLightbox(images, idx)}
+          style={styles.fourImageItem}
+        >
+          <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+});
+
+// =========================================================================
+// MEMOIZED FEED POST CARD COMPONENT
+// =========================================================================
+interface FeedPostCardProps {
+  post: CivicReport;
+  currentUserId?: string;
+  currentUserEmail?: string;
+  currentUserAvatar?: string;
+  currentUserFullName?: string;
+  authorReportsCount?: number;
+  onOpenLightbox: (images: string[], index: number) => void;
+  onOpenAuthorProfile: (profile: AuthorProfileModalData) => void;
+}
+
+const FeedPostCard: React.FC<FeedPostCardProps> = React.memo(
+  ({
+    post,
+    currentUserId,
+    currentUserEmail,
+    currentUserAvatar,
+    currentUserFullName,
+    authorReportsCount,
+    onOpenLightbox,
+    onOpenAuthorProfile,
+  }) => {
+    const normStatus = normalizeReportStatus(post.status);
+    const isResolved = normStatus === 'resolved';
+    const isInProgress = normStatus === 'in_progress';
+    const isApproved = normStatus === 'approved';
+
+    const isCurrentAuthor =
+      (currentUserId && post.user_id === currentUserId) ||
+      (currentUserEmail &&
+        post.resident_email &&
+        currentUserEmail.toLowerCase().trim() === post.resident_email.toLowerCase().trim());
+
+    // Author Avatar (Live from current session, post profiles object, or resident_avatar)
+    const authorAvatar =
+      (isCurrentAuthor && currentUserAvatar) ||
+      post.resident_avatar ||
+      post.profiles?.avatar_url ||
+      undefined;
+
+    const authorName =
+      (isCurrentAuthor && currentUserFullName) ||
+      post.profiles?.full_name ||
+      post.resident_name ||
+      'Mati Resident';
+
+    // Priority pill config
+    const priority = (post.priority as any) === 'urgent' ? 'high' : post.priority || 'medium';
+    const priorityConfig = {
+      high: { label: '🔴 High', bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' },
+      medium: { label: '🟡 Normal', bg: '#FEFCE8', text: '#CA8A04', border: '#FEF08A' },
+      low: { label: '🟢 Minimal', bg: '#F7FEE7', text: '#4D7C0F', border: '#D9F99D' },
+    }[priority];
+
+    const handlePressProfile = () => {
+      onOpenAuthorProfile({
+        name: authorName,
+        avatarUrl: authorAvatar,
+        barangay: post.barangay || post.profiles?.barangay || 'Mati City',
+        city: post.profiles?.city || 'Mati City',
+        verificationStatus: post.profiles?.verification_status || 'verified',
+        userId: post.user_id,
+        totalReports: authorReportsCount || 1,
+      });
+    };
+
+    return (
+      <View style={styles.facebookPostCard}>
+        {/* POST HEADER: Avatar, Author Name, Timestamp, Location & Status */}
+        <View style={styles.postHeader}>
+          <TouchableOpacity
+            style={styles.authorHeaderLeft}
+            onPress={handlePressProfile}
+            activeOpacity={0.75}
+          >
+            <AuthorAvatar avatarUrl={authorAvatar} authorName={authorName} size={42} />
+
+            <View style={styles.headerInfoCol}>
+              <View style={styles.nameRow}>
+                <Text style={styles.authorName} numberOfLines={1}>
+                  {authorName}
+                </Text>
+                <Ionicons name="chevron-forward" size={13} color="#94A3B8" style={{ marginLeft: 2 }} />
+              </View>
+
+              {/* Subtitle Line 1: Time and Global Icon */}
+              <View style={styles.timeGlobeRow}>
+                <Text style={styles.timeText}>{formatTimeAgo(post.created_at)}</Text>
+                <Text style={styles.metaDot}>•</Text>
+                <Ionicons name="earth" size={11} color="#64748B" />
+              </View>
+
+              {/* Subtitle Line 2: Barangay Placement */}
+              {post.barangay ? (
+                <View style={styles.headerBarangayRow}>
+                  <Ionicons name="location-sharp" size={11} color="#EF4444" />
+                  <Text style={styles.headerBarangayText} numberOfLines={1}>
+                    Brgy. {post.barangay}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </TouchableOpacity>
+
+          {/* Status Pill on Top Right */}
+          <View style={styles.statusPillsWrapper}>
+            {isResolved ? (
+              <View style={[styles.statusPill, styles.statusResolvedPill]}>
+                <Ionicons name="checkmark-circle" size={11} color="#047857" />
+                <Text style={styles.statusResolvedText}>Resolved</Text>
+              </View>
+            ) : isInProgress ? (
+              <View style={[styles.statusPill, styles.statusInProgressPill]}>
+                <Ionicons name="time" size={11} color="#1D4ED8" />
+                <Text style={styles.statusInProgressText}>In Progress</Text>
+              </View>
+            ) : (
+              <View style={[styles.statusPill, styles.statusQueuedPill]}>
+                <Ionicons name="hourglass" size={11} color="#B45309" />
+                <Text style={styles.statusQueuedText}>{isApproved ? 'Queued' : 'Under Review'}</Text>
+              </View>
+            )}
+
+            {/* Priority Tag */}
+            {priority !== 'medium' && (
+              <View
+                style={[
+                  styles.priorityPill,
+                  {
+                    backgroundColor: priorityConfig.bg,
+                    borderColor: priorityConfig.border,
+                  },
+                ]}
+              >
+                <Text style={[styles.priorityPillText, { color: priorityConfig.text }]}>
+                  {priorityConfig.label}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* POST CONTENT: Title & Description */}
+        <View style={styles.postContentSection}>
+          <Text style={styles.postTitle}>{post.title}</Text>
+          <Text style={styles.postDescription}>{post.description}</Text>
+
+          {/* Metadata Row: GPS Coordinates, Exact Address & Category Badges */}
+          <View style={styles.metaDetailsRow}>
+            {/* GPS Coordinates Badge */}
+            {post.latitude != null && post.longitude != null && (
+              <View style={styles.coordsBadge}>
+                <Ionicons name="navigate-circle" size={12} color="#0284C7" />
+                <Text style={styles.coordsBadgeText}>
+                  {post.latitude.toFixed(4)}°N, {post.longitude.toFixed(4)}°E
+                </Text>
+              </View>
+            )}
+
+            {/* Exact Street Address if available */}
+            {post.address && (
+              <View style={styles.addressBadge}>
+                <Ionicons name="location-outline" size={11} color="#475569" />
+                <Text style={styles.addressBadgeText} numberOfLines={1}>
+                  {post.address}
+                </Text>
+              </View>
+            )}
+
+            {/* Category Chip */}
+            {post.category && (
+              <View style={styles.categoryChipSmall}>
+                <Ionicons name="pricetag-outline" size={11} color={THEME.colors.primary} />
+                <Text style={styles.categoryChipSmallText}>{post.category}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* POST PHOTO(S) */}
+        <PostImageGrid imageUrl={post.image_url} onOpenLightbox={onOpenLightbox} />
+
+        {/* POST FOOTER: Department Routing & City Feedback Note */}
+        {(post.office_name || post.admin_notes) && (
+          <View style={styles.postFooterSection}>
+            {post.office_name && (
+              <View style={styles.officeDispatchTag}>
+                <Ionicons name="business" size={13} color={THEME.colors.primary} />
+                <Text style={styles.officeDispatchText} numberOfLines={1}>
+                  To be worked by: <Text style={{ fontWeight: '800' }}>{post.office_name}</Text>
+                </Text>
+              </View>
+            )}
+
+            {post.admin_notes && (
+              <View style={styles.adminFeedbackBox}>
+                <Text style={styles.adminFeedbackLabel}>City Hall Note:</Text>
+                <Text style={styles.adminFeedbackText}>{post.admin_notes}</Text>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+    );
+  }
+);
+
+// =========================================================================
+// MAIN FEED SCREEN COMPONENT
+// =========================================================================
 interface FeedScreenProps {
   onScroll?: (event: any) => void;
 }
@@ -103,6 +506,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
   const [selectedCategory, setSelectedCategory] = useState('All Categories');
   const [posts, setPosts] = useState<CivicReport[]>([]);
   const [lightboxState, setLightboxState] = useState<{ images: string[]; index: number } | null>(null);
+  const [authorModalData, setAuthorModalData] = useState<AuthorProfileModalData | null>(null);
 
   // Dropdown Modals State
   const [statusDropdownVisible, setStatusDropdownVisible] = useState(false);
@@ -110,42 +514,61 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
 
   const fetchReports = useCallback(async () => {
     try {
-      // 1. Fetch all reports from Supabase
-      const { data: reportsData, error: reportsError } = await supabase
-        .from('reports')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // 1. Fetch reports with joined profiles relation
+      let reportsData: any[] | null = null;
+      try {
+        const { data, error } = await supabase
+          .from('reports')
+          .select('*, profiles:user_id(id, full_name, email, phone, avatar_url, barangay, city, verification_status)')
+          .order('created_at', { ascending: false });
 
-      if (reportsError) {
-        console.warn('Error fetching feed reports:', reportsError);
+        if (!error && data) {
+          reportsData = data;
+        }
+      } catch (_) {}
+
+      // Fallback query if relation is not configured
+      if (!reportsData) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('reports')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (fallbackError) {
+          console.warn('Error fetching feed reports:', fallbackError);
+        }
+        reportsData = fallbackData || [];
       }
 
-      // 2. Fetch all profiles to map the latest avatar and name for each author
-      let profilesMap: Record<string, { avatar_url?: string; full_name?: string }> = {};
+      // 2. Fetch all profiles to build a comprehensive fast lookup dictionary
+      let profilesMap: Record<string, { id?: string; avatar_url?: string; full_name?: string; barangay?: string; city?: string; verification_status?: string; email?: string; phone?: string }> = {};
       try {
         const { data: profilesData } = await supabase
           .from('profiles')
-          .select('id, full_name, email, phone, avatar_url');
+          .select('id, full_name, email, phone, avatar_url, barangay, city, verification_status');
 
-        if (profilesData) {
-          profilesData.forEach((p) => {
+        if (profilesData && Array.isArray(profilesData)) {
+          profilesData.forEach((p: any) => {
+            const avatar = p.avatar_url || p.avatarUrl;
+            const name = p.full_name || p.fullName;
+            const item = {
+              id: p.id,
+              avatar_url: avatar,
+              full_name: name,
+              barangay: p.barangay,
+              city: p.city,
+              verification_status: p.verification_status,
+              email: p.email,
+              phone: p.phone,
+            };
             if (p.id) {
-              profilesMap[p.id] = {
-                avatar_url: p.avatar_url,
-                full_name: p.full_name,
-              };
+              profilesMap[p.id] = item;
             }
             if (p.email) {
-              profilesMap[p.email.toLowerCase().trim()] = {
-                avatar_url: p.avatar_url,
-                full_name: p.full_name,
-              };
+              profilesMap[p.email.toLowerCase().trim()] = item;
             }
-            if (p.full_name) {
-              profilesMap[p.full_name.toLowerCase().trim()] = {
-                avatar_url: p.avatar_url,
-                full_name: p.full_name,
-              };
+            if (name) {
+              profilesMap[name.toLowerCase().trim()] = item;
             }
           });
         }
@@ -155,7 +578,9 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
 
       if (reportsData && reportsData.length > 0) {
         const enriched = reportsData.map((r: any) => {
-          const profile =
+          // Normalize profile info from joined profiles relation or lookup map
+          const joinedProfile = Array.isArray(r.profiles) ? r.profiles[0] : r.profiles;
+          const lookupProfile =
             (r.user_id && profilesMap[r.user_id]) ||
             (r.resident_email && profilesMap[r.resident_email.toLowerCase().trim()]) ||
             (r.resident_name && profilesMap[r.resident_name.toLowerCase().trim()]) ||
@@ -170,14 +595,49 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
 
           const resolvedAvatar =
             (isCurrentAuthor && currentUser.avatarUrl) ||
-            profile?.avatar_url ||
+            joinedProfile?.avatar_url ||
+            joinedProfile?.avatarUrl ||
+            lookupProfile?.avatar_url ||
             r.resident_avatar ||
+            r.avatar_url ||
             undefined;
+
+          const resolvedName =
+            (isCurrentAuthor && currentUser.fullName) ||
+            joinedProfile?.full_name ||
+            joinedProfile?.fullName ||
+            lookupProfile?.full_name ||
+            r.resident_name ||
+            'Mati Resident';
+
+          const resolvedBarangay =
+            (isCurrentAuthor && currentUser.barangay) ||
+            joinedProfile?.barangay ||
+            lookupProfile?.barangay ||
+            r.barangay ||
+            'Central (Poblacion)';
+
+          const resolvedStatus =
+            (isCurrentAuthor && currentUser.verificationStatus) ||
+            joinedProfile?.verification_status ||
+            lookupProfile?.verification_status ||
+            'verified';
 
           return {
             ...r,
             resident_avatar: resolvedAvatar,
-            resident_name: profile?.full_name || r.resident_name,
+            resident_name: resolvedName,
+            barangay: r.barangay || resolvedBarangay,
+            profiles: {
+              id: r.user_id || lookupProfile?.id,
+              avatar_url: resolvedAvatar,
+              full_name: resolvedName,
+              barangay: resolvedBarangay,
+              city: lookupProfile?.city || 'Mati City',
+              verification_status: resolvedStatus,
+              email: lookupProfile?.email || r.resident_email,
+              phone: lookupProfile?.phone || r.resident_phone,
+            },
           };
         });
         setPosts(enriched);
@@ -195,7 +655,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
   useEffect(() => {
     fetchReports();
 
-    // Subscribe to realtime reports AND profiles updates (so avatar changes immediately reflect)
+    // Subscribe to realtime reports AND profiles updates (so avatar and report changes immediately reflect)
     const channel = supabase
       .channel('feed-reports-and-profiles-realtime')
       .on(
@@ -224,23 +684,23 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
     await fetchReports();
   };
 
-  // Helper for relative time (Facebook style)
-  const formatTimeAgo = (dateString?: string) => {
-    if (!dateString) return 'Just now';
-    const now = new Date();
-    const date = new Date(dateString);
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  const handleOpenLightbox = useCallback((images: string[], index: number) => {
+    setLightboxState({ images, index });
+  }, []);
 
-    if (diffInSeconds < 60) return 'Just now';
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+  const handleOpenAuthorProfile = useCallback((profile: AuthorProfileModalData) => {
+    setAuthorModalData(profile);
+  }, []);
 
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
+  // Map counting author reports
+  const authorReportCountsMap = useMemo(() => {
+    const counts: Record<string, number> = {};
+    posts.forEach((p) => {
+      const key = p.user_id || p.resident_name || 'unknown';
+      counts[key] = (counts[key] || 0) + 1;
     });
-  };
+    return counts;
+  }, [posts]);
 
   // Only approved, in-progress, and resolved reports for public feed (excludes 'pending' / under review and 'rejected')
   const publicPosts = useMemo(() => {
@@ -304,81 +764,45 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
     setSelectedCategory('All Categories');
   };
 
-  const renderFacebookImageGrid = (rawImageUrl?: string | null) => {
-    const images = parseReportImages(rawImageUrl);
-    if (images.length === 0) return null;
-
-    if (images.length === 1) {
+  const renderPostItem = useCallback(
+    ({ item }: { item: CivicReport }) => {
+      const authorKey = item.user_id || item.resident_name || 'unknown';
+      const count = authorReportCountsMap[authorKey] || 1;
       return (
-        <TouchableOpacity
-          activeOpacity={0.94}
-          onPress={() => setLightboxState({ images, index: 0 })}
-          style={styles.singleImageContainer}
-        >
-          <Image source={{ uri: images[0] }} style={styles.singleImage} resizeMode="cover" />
-        </TouchableOpacity>
+        <FeedPostCard
+          post={item}
+          currentUserId={currentUser?.id}
+          currentUserEmail={currentUser?.email}
+          currentUserAvatar={currentUser?.avatarUrl}
+          currentUserFullName={currentUser?.fullName}
+          authorReportsCount={count}
+          onOpenLightbox={handleOpenLightbox}
+          onOpenAuthorProfile={handleOpenAuthorProfile}
+        />
       );
-    }
+    },
+    [
+      currentUser?.id,
+      currentUser?.email,
+      currentUser?.avatarUrl,
+      currentUser?.fullName,
+      authorReportCountsMap,
+      handleOpenLightbox,
+      handleOpenAuthorProfile,
+    ]
+  );
 
-    if (images.length === 2) {
-      return (
-        <View style={styles.twoImageGrid}>
-          {images.map((uri, idx) => (
-            <TouchableOpacity
-              key={idx}
-              activeOpacity={0.92}
-              onPress={() => setLightboxState({ images, index: idx })}
-              style={styles.twoImageItem}
-            >
-              <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
-            </TouchableOpacity>
-          ))}
-        </View>
-      );
-    }
+  const keyExtractor = useCallback((item: CivicReport) => item.id, []);
 
-    if (images.length === 3) {
-      return (
-        <View style={styles.threeImageGrid}>
-          <TouchableOpacity
-            activeOpacity={0.92}
-            onPress={() => setLightboxState({ images, index: 0 })}
-            style={styles.threeImageLarge}
-          >
-            <Image source={{ uri: images[0] }} style={styles.gridImage} resizeMode="cover" />
-          </TouchableOpacity>
-          <View style={styles.threeImageStackedCol}>
-            {images.slice(1, 3).map((uri, idx) => (
-              <TouchableOpacity
-                key={idx + 1}
-                activeOpacity={0.92}
-                onPress={() => setLightboxState({ images, index: idx + 1 })}
-                style={styles.threeImageStackedItem}
-              >
-                <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      );
-    }
-
-    // 4 Images (2 x 2 Facebook Grid)
-    return (
-      <View style={styles.fourImageGrid}>
-        {images.slice(0, 4).map((uri, idx) => (
-          <TouchableOpacity
-            key={idx}
-            activeOpacity={0.92}
-            onPress={() => setLightboxState({ images, index: idx })}
-            style={styles.fourImageItem}
-          >
-            <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
-          </TouchableOpacity>
-        ))}
-      </View>
-    );
-  };
+  // Reports by the selected author in the modal
+  const authorReportsInFeed = useMemo(() => {
+    if (!authorModalData) return [];
+    return publicPosts.filter((p) => {
+      if (authorModalData.userId && p.user_id === authorModalData.userId) return true;
+      if (p.resident_name && p.resident_name.toLowerCase().trim() === authorModalData.name.toLowerCase().trim()) return true;
+      return false;
+    });
+  }, [authorModalData, publicPosts]);
 
   return (
     <View style={styles.screenWrapper}>
@@ -454,7 +878,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
                 ]}
               >
                 <Ionicons
-                  name="pricetags"
+                  name="grid"
                   size={14}
                   color={selectedCategory !== 'All Categories' ? THEME.colors.primary : '#475569'}
                 />
@@ -480,13 +904,15 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Active Filter Quick Badges & Reset Strip (if filter applied) */}
+        {/* Active Filter Chips / Reset Strip */}
         {isFiltered && (
           <View style={styles.activeFiltersStrip}>
             <View style={styles.activeFilterTags}>
               {selectedStatusFilter !== 'all' && (
                 <View style={styles.activeTagBadge}>
-                  <Text style={styles.activeTagText}>{activeStatusLabel}</Text>
+                  <Text style={styles.activeTagText} numberOfLines={1}>
+                    {activeStatusLabel}
+                  </Text>
                   <TouchableOpacity
                     onPress={() => setSelectedStatusFilter('all')}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
@@ -523,248 +949,190 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({ onScroll }) => {
       </View>
 
       {/* =========================================================================
-          SCROLLABLE FEED OF POSTS (Scrolls smoothly underneath the fixed filters)
+          HIGH-PERFORMANCE VIRTUALIZED FLATLIST OF POSTS
           ========================================================================= */}
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[THEME.colors.primary]}
-            tintColor={THEME.colors.primary}
-          />
-        }
-      >
-        {/* FEED POSTS LIST */}
-        {loading && posts.length === 0 ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={THEME.colors.primary} />
-            <Text style={styles.loadingText}>Loading civic posts...</Text>
-          </View>
-        ) : filteredPosts.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <View style={styles.emptyBadgeCircle}>
-              <Ionicons name="newspaper-outline" size={40} color={THEME.colors.primary} />
+      {loading && posts.length === 0 ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={THEME.colors.primary} />
+          <Text style={styles.loadingText}>Loading civic posts...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredPosts}
+          keyExtractor={keyExtractor}
+          renderItem={renderPostItem}
+          style={styles.container}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          onScroll={onScroll}
+          scrollEventThrottle={32}
+          initialNumToRender={5}
+          maxToRenderPerBatch={5}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS === 'android'}
+          updateCellsBatchingPeriod={50}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ListEmptyComponent={
+            <View style={styles.emptyCard}>
+              <View style={styles.emptyBadgeCircle}>
+                <Ionicons name="newspaper-outline" size={40} color={THEME.colors.primary} />
+              </View>
+              <Text style={styles.emptyTitle}>No Posts in this Filter</Text>
+              <Text style={styles.emptySubtitle}>
+                {selectedStatusFilter === 'in_progress'
+                  ? 'There are currently no reports with field personnel deployed.'
+                  : selectedStatusFilter === 'resolved'
+                  ? 'No reports have been marked resolved yet.'
+                  : selectedStatusFilter === 'not_yet_in_progress'
+                  ? 'No reports are currently waiting for field dispatch.'
+                  : 'No reports match your active category filter.'}
+              </Text>
+              {isFiltered && (
+                <TouchableOpacity
+                  style={styles.resetFilterBtn}
+                  onPress={handleResetFilters}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.resetFilterBtnText}>Reset All Filters</Text>
+                </TouchableOpacity>
+              )}
             </View>
-            <Text style={styles.emptyTitle}>No Posts in this Filter</Text>
-            <Text style={styles.emptySubtitle}>
-              {selectedStatusFilter === 'in_progress'
-                ? 'There are currently no reports with field personnel deployed.'
-                : selectedStatusFilter === 'resolved'
-                ? 'No reports have been marked resolved yet.'
-                : selectedStatusFilter === 'not_yet_in_progress'
-                ? 'No reports are currently waiting for field dispatch.'
-                : 'No reports match your active category filter.'}
-            </Text>
-            {isFiltered && (
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[THEME.colors.primary]}
+              tintColor={THEME.colors.primary}
+            />
+          }
+        />
+      )}
+
+      {/* =========================================================================
+          CITIZEN AUTHOR PROFILE MODAL (Opens when tapping on any user's post header)
+          ========================================================================= */}
+      {authorModalData && (
+        <Modal
+          visible={!!authorModalData}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setAuthorModalData(null)}
+        >
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setAuthorModalData(null)}
+          >
+            <View style={styles.authorProfileModalSheet} onStartShouldSetResponder={() => true}>
+              <View style={styles.modalHandle} />
+
+              {/* Top Navigation */}
+              <View style={styles.modalHeaderRow}>
+                <View style={styles.modalTitleCol}>
+                  <Text style={styles.modalTitle}>Citizen Profile</Text>
+                  <Text style={styles.modalSubtitle}>Verified Mati City Resident</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setAuthorModalData(null)}
+                  style={styles.modalCloseBtn}
+                >
+                  <Ionicons name="close" size={20} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Profile Card Hero */}
+              <View style={styles.authorHeroCard}>
+                <View style={styles.authorHeroAvatarWrapper}>
+                  <AuthorAvatar
+                    avatarUrl={authorModalData.avatarUrl}
+                    authorName={authorModalData.name}
+                    size={76}
+                  />
+                  <View style={styles.authorVerifiedBadgeCircle}>
+                    <Ionicons name="shield-checkmark" size={14} color="#FFFFFF" />
+                  </View>
+                </View>
+
+                <Text style={styles.authorHeroName}>{authorModalData.name}</Text>
+
+                <View style={styles.authorLocationRow}>
+                  <Ionicons name="location" size={13} color="#EF4444" />
+                  <Text style={styles.authorLocationText}>
+                    Brgy. {authorModalData.barangay || 'Central (Poblacion)'}, Mati City
+                  </Text>
+                </View>
+
+                {/* Status Badges */}
+                <View style={styles.authorBadgeRow}>
+                  <View style={styles.citizenStatusChip}>
+                    <Ionicons name="checkmark-circle" size={13} color="#059669" />
+                    <Text style={styles.citizenStatusChipText}>
+                      {authorModalData.verificationStatus === 'pending'
+                        ? 'Verification Under Review'
+                        : 'Verified Community Resident'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Citizen Stats */}
+              <View style={styles.authorStatsRow}>
+                <View style={styles.authorStatBox}>
+                  <Text style={styles.authorStatNum}>{authorModalData.totalReports || 1}</Text>
+                  <Text style={styles.authorStatLabel}>Civic Reports</Text>
+                </View>
+                <View style={styles.authorStatDivider} />
+                <View style={styles.authorStatBox}>
+                  <Text style={[styles.authorStatNum, { color: '#059669' }]}>Active</Text>
+                  <Text style={styles.authorStatLabel}>Account Status</Text>
+                </View>
+                <View style={styles.authorStatDivider} />
+                <View style={styles.authorStatBox}>
+                  <Text style={styles.authorStatNum}>Mati</Text>
+                  <Text style={styles.authorStatLabel}>City Registry</Text>
+                </View>
+              </View>
+
+              {/* Recent Reports List */}
+              <Text style={styles.authorRecentReportsHeading}>
+                REPORTS BY THIS CITIZEN ({authorReportsInFeed.length})
+              </Text>
+              <ScrollView style={styles.authorReportsListScroll} showsVerticalScrollIndicator={false}>
+                {authorReportsInFeed.length > 0 ? (
+                  authorReportsInFeed.map((rep) => (
+                    <View key={rep.id} style={styles.authorMiniReportCard}>
+                      <View style={styles.authorMiniReportHeader}>
+                        <Text style={styles.authorMiniReportCategory} numberOfLines={1}>
+                          {rep.category}
+                        </Text>
+                        <Text style={styles.authorMiniReportTime}>
+                          {formatTimeAgo(rep.created_at)}
+                        </Text>
+                      </View>
+                      <Text style={styles.authorMiniReportTitle} numberOfLines={1}>
+                        {rep.title}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.authorNoReportsBox}>
+                    <Text style={styles.authorNoReportsText}>No other active reports in this view.</Text>
+                  </View>
+                )}
+              </ScrollView>
+
               <TouchableOpacity
-                style={styles.resetFilterBtn}
-                onPress={handleResetFilters}
+                style={styles.authorCloseFullBtn}
+                onPress={() => setAuthorModalData(null)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.resetFilterBtnText}>Reset All Filters</Text>
+                <Text style={styles.authorCloseFullBtnText}>Close Citizen Profile</Text>
               </TouchableOpacity>
-            )}
-          </View>
-        ) : (
-          <View style={styles.postsList}>
-            {filteredPosts.map((post) => {
-              const normStatus = normalizeReportStatus(post.status);
-              const isResolved = normStatus === 'resolved';
-              const isInProgress = normStatus === 'in_progress';
-              const isApproved = normStatus === 'approved';
-
-              const isCurrentAuthor =
-                currentUser &&
-                (post.user_id === currentUser.id ||
-                  (post.resident_email &&
-                    currentUser.email &&
-                    post.resident_email.toLowerCase().trim() === currentUser.email.toLowerCase().trim()));
-
-              // Author Avatar (Live from current session, profiles map, or reports table)
-              const authorAvatar =
-                (isCurrentAuthor && currentUser.avatarUrl) ||
-                post.resident_avatar ||
-                post.profiles?.avatar_url ||
-                undefined;
-
-              const authorName =
-                (isCurrentAuthor && currentUser.fullName) ||
-                post.profiles?.full_name ||
-                post.resident_name ||
-                'Mati Resident';
-
-              // Priority pill config
-              const priority = (post.priority as any) === 'urgent' ? 'high' : post.priority || 'medium';
-              const priorityConfig = {
-                high: { label: '🔴 High', bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' },
-                medium: { label: '🟡 Normal', bg: '#FEFCE8', text: '#CA8A04', border: '#FEF08A' },
-                low: { label: '🟢 Minimal', bg: '#F7FEE7', text: '#4D7C0F', border: '#D9F99D' },
-              }[priority];
-
-              return (
-                <View key={post.id} style={styles.facebookPostCard}>
-                  {/* POST HEADER: Avatar, Author Name, Timestamp, Location & Status */}
-                  <View style={styles.postHeader}>
-                    <View style={styles.authorAvatarWrapper}>
-                      {authorAvatar ? (
-                        <Image
-                          source={{ uri: authorAvatar }}
-                          style={styles.authorAvatar}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={styles.authorAvatarFallback}>
-                          <Text style={styles.authorInitial}>
-                            {authorName.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-
-                    <View style={styles.headerInfoCol}>
-                      <View style={styles.nameRow}>
-                        <Text style={styles.authorName} numberOfLines={1}>
-                          {authorName}
-                        </Text>
-                      </View>
-
-                      {/* Subtitle Line 1: Time and Global Icon on the same line */}
-                      <View style={styles.timeGlobeRow}>
-                        <Text style={styles.timeText}>
-                          {formatTimeAgo(post.created_at)}
-                        </Text>
-                        <Text style={styles.metaDot}>•</Text>
-                        <Ionicons name="earth" size={11} color="#64748B" />
-                      </View>
-
-                      {/* Subtitle Line 2: Barangay Placement on the bottom of the global icon */}
-                      {post.barangay ? (
-                        <View style={styles.headerBarangayRow}>
-                          <Ionicons name="location-sharp" size={11} color="#EF4444" />
-                          <Text style={styles.headerBarangayText} numberOfLines={1}>
-                            Brgy. {post.barangay}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {/* Status Pill on Top Right */}
-                    <View style={styles.statusPillsWrapper}>
-                      {isResolved ? (
-                        <View style={[styles.statusPill, styles.statusResolvedPill]}>
-                          <Ionicons name="checkmark-circle" size={11} color="#047857" />
-                          <Text style={styles.statusResolvedText}>Resolved</Text>
-                        </View>
-                      ) : isInProgress ? (
-                        <View style={[styles.statusPill, styles.statusInProgressPill]}>
-                          <Ionicons name="time" size={11} color="#1D4ED8" />
-                          <Text style={styles.statusInProgressText}>In Progress</Text>
-                        </View>
-                      ) : (
-                        <View style={[styles.statusPill, styles.statusQueuedPill]}>
-                          <Ionicons name="hourglass" size={11} color="#B45309" />
-                          <Text style={styles.statusQueuedText}>
-                            {isApproved ? 'Queued' : 'Under Review'}
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Priority Tag */}
-                      {priority !== 'medium' && (
-                        <View
-                          style={[
-                            styles.priorityPill,
-                            {
-                              backgroundColor: priorityConfig.bg,
-                              borderColor: priorityConfig.border,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.priorityPillText,
-                              { color: priorityConfig.text },
-                            ]}
-                          >
-                            {priorityConfig.label}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
-
-                  {/* POST CONTENT: Title & Description */}
-                  <View style={styles.postContentSection}>
-                    <Text style={styles.postTitle}>{post.title}</Text>
-                    <Text style={styles.postDescription}>{post.description}</Text>
-
-                    {/* Metadata Row: GPS Coordinates, Exact Address & Category Badges */}
-                    <View style={styles.metaDetailsRow}>
-                      {/* GPS Coordinates Badge */}
-                      {post.latitude != null && post.longitude != null && (
-                        <View style={styles.coordsBadge}>
-                          <Ionicons name="navigate-circle" size={12} color="#0284C7" />
-                          <Text style={styles.coordsBadgeText}>
-                            {post.latitude.toFixed(4)}°N, {post.longitude.toFixed(4)}°E
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Exact Street Address if available */}
-                      {post.address && (
-                        <View style={styles.addressBadge}>
-                          <Ionicons name="location-outline" size={11} color="#475569" />
-                          <Text style={styles.addressBadgeText} numberOfLines={1}>
-                            {post.address}
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Category Chip */}
-                      {post.category && (
-                        <View style={styles.categoryChipSmall}>
-                          <Ionicons name="pricetag-outline" size={11} color={THEME.colors.primary} />
-                          <Text style={styles.categoryChipSmallText}>{post.category}</Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
-
-                  {/* POST PHOTO(S) (Facebook-style 1, 2, 3, or 2x2 Grid with tap-to-zoom & arrows) */}
-                  {renderFacebookImageGrid(post.image_url)}
-
-                  {/* POST FOOTER: Department Routing & City Feedback Note (NO like or comment buttons) */}
-                  {(post.office_name || post.admin_notes) && (
-                    <View style={styles.postFooterSection}>
-                      {post.office_name && (
-                        <View style={styles.officeDispatchTag}>
-                          <Ionicons name="business" size={13} color={THEME.colors.primary} />
-                          <Text style={styles.officeDispatchText} numberOfLines={1}>
-                            To be worked by: <Text style={{ fontWeight: '800' }}>{post.office_name}</Text>
-                          </Text>
-                        </View>
-                      )}
-
-                      {post.admin_notes && (
-                        <View style={styles.adminFeedbackBox}>
-                          <Text style={styles.adminFeedbackLabel}>City Hall Note:</Text>
-                          <Text style={styles.adminFeedbackText}>{post.admin_notes}</Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
 
       {/* =========================================================================
           REPORTS STATUS DROPDOWN MODAL
@@ -1223,11 +1591,6 @@ const styles = StyleSheet.create({
     paddingBottom: 96,
   },
 
-  // POSTS LIST
-  postsList: {
-    gap: 12,
-  },
-
   // FACEBOOK-STYLE POST CARD
   facebookPostCard: {
     backgroundColor: '#FFFFFF',
@@ -1251,36 +1614,20 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     gap: 10,
   },
+  authorHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    flex: 1,
+  },
   authorAvatarWrapper: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
     overflow: 'hidden',
-    backgroundColor: '#EFF6FF',
     borderWidth: 1.5,
-    borderColor: '#DBEAFE',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  authorAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-  },
-  authorAvatarFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#DBEAFE',
   },
   authorInitial: {
-    fontSize: 16,
     fontWeight: '900',
-    color: THEME.colors.primary,
   },
   headerInfoCol: {
     flex: 1,
@@ -1595,6 +1942,176 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: THEME.colors.primary,
+  },
+
+  // CITIZEN AUTHOR PROFILE MODAL STYLES
+  authorProfileModalSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 36,
+    maxHeight: screenHeight * 0.85,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  authorHeroCard: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  authorHeroAvatarWrapper: {
+    position: 'relative',
+    marginBottom: 10,
+  },
+  authorVerifiedBadgeCircle: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: '#059669',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  authorHeroName: {
+    fontSize: 19,
+    fontWeight: '900',
+    color: '#0F172A',
+    textAlign: 'center',
+  },
+  authorLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  authorLocationText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  authorBadgeRow: {
+    marginTop: 10,
+  },
+  citizenStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  citizenStatusChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#047857',
+  },
+  authorStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingVertical: 14,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  authorStatBox: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  authorStatNum: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: THEME.colors.primary,
+  },
+  authorStatLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    marginTop: 2,
+    textTransform: 'uppercase',
+  },
+  authorStatDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#E2E8F0',
+  },
+  authorRecentReportsHeading: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#94A3B8',
+    letterSpacing: 0.5,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  authorReportsListScroll: {
+    maxHeight: 140,
+  },
+  authorMiniReportCard: {
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+    gap: 3,
+  },
+  authorMiniReportHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  authorMiniReportCategory: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+    flex: 1,
+  },
+  authorMiniReportTime: {
+    fontSize: 10,
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  authorMiniReportTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  authorNoReportsBox: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  authorNoReportsText: {
+    fontSize: 11.5,
+    color: '#94A3B8',
+    fontStyle: 'italic',
+  },
+  authorCloseFullBtn: {
+    marginTop: 14,
+    backgroundColor: THEME.colors.primary,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  authorCloseFullBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 
   // DROPDOWN BOTTOM SHEET MODAL

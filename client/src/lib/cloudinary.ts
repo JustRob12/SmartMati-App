@@ -14,13 +14,42 @@ const UPLOAD_PRESET =
  * Opens image gallery, prompts user to crop in 1:1 aspect ratio, and returns local file URI.
  */
 export const pickAndCropAvatar = async (): Promise<string | null> => {
+  return pickAvatarFromGallery();
+};
+
+/**
+ * Pick photo from device photo gallery with 1:1 square crop.
+ */
+export const pickAvatarFromGallery = async (): Promise<string | null> => {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
-    throw new Error('Permission to access photo library was denied. Please allow access in settings.');
+    throw new Error('Permission to access photo library was denied. Please allow access in device settings.');
   }
 
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['images'],
+    allowsEditing: true,
+    aspect: [1, 1], // 1:1 square crop for profile picture
+    quality: 0.85,
+  });
+
+  if (result.canceled || !result.assets || result.assets.length === 0) {
+    return null;
+  }
+
+  return result.assets[0].uri;
+};
+
+/**
+ * Take live portrait photo using device camera with 1:1 square crop.
+ */
+export const takeAvatarWithCamera = async (): Promise<string | null> => {
+  const permission = await ImagePicker.requestCameraPermissionsAsync();
+  if (!permission.granted) {
+    throw new Error('Permission to access camera was denied. Please allow camera access in device settings.');
+  }
+
+  const result = await ImagePicker.launchCameraAsync({
     allowsEditing: true,
     aspect: [1, 1], // 1:1 square crop for profile picture
     quality: 0.85,

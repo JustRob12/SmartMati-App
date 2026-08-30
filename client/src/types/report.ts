@@ -25,8 +25,14 @@ export interface CivicReport {
   reviewed_at?: string;
   created_at?: string;
   profiles?: {
+    id?: string;
     avatar_url?: string;
     full_name?: string;
+    barangay?: string;
+    city?: string;
+    verification_status?: string;
+    email?: string;
+    phone?: string;
   };
   updated_at?: string;
 }

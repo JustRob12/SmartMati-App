@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../lib/constants';
+import { THEME, getDefaultCitizenAvatar } from '../lib/constants';
 import { useAuth } from '../contexts/AuthContext';
 
 interface MainHeaderProps {
@@ -41,7 +41,7 @@ export const MainHeader: React.FC<MainHeaderProps> = ({
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           {user?.avatarUrl ? (
-            <Image source={{ uri: user.avatarUrl }} style={styles.avatarImage} />
+            <Image source={{ uri: user.avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
           ) : (
             <View style={styles.avatarFallback}>
               <Ionicons name="person" size={18} color={THEME.colors.primary} />

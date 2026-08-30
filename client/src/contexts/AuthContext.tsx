@@ -108,6 +108,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .then(() => {});
       }
 
+      // Auto backfill avatar and name into reports table so all user's posts display their profile picture
+      if (resolvedAvatar && userId) {
+        supabase
+          .from('reports')
+          .update({
+            resident_avatar: resolvedAvatar,
+            ...(data?.full_name ? { resident_name: data.full_name } : {}),
+          })
+          .eq('user_id', userId)
+          .then(
+            () => {},
+            () => {}
+          );
+      }
+
       if (data) {
         const rawStatus = (data.verification_status || 'unverified').toString().trim().toLowerCase();
         let parsedStatus: VerificationStatus = 'unverified';
@@ -229,43 +244,95 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateAvatar = async (avatarUrl: string): Promise<{ error?: string }> => {
     if (!user) return { error: 'No authenticated user found.' };
 
-    // 1. Optimistic React state update
-    setUser((prev) => (prev ? { ...prev, avatarUrl } : null));
+    if (!isSupabaseConfigured) {
+      setUser((prev) => (prev ? { ...prev, avatarUrl } : null));
+      return {};
+    }
 
-    if (isSupabaseConfigured) {
-      try {
-        // 2. Persist in Supabase Auth user_metadata so it syncs across all phones/sessions immediately
-        try {
-          await supabase.auth.updateUser({
-            data: { avatar_url: avatarUrl, avatarUrl },
-          });
-        } catch (authErr) {
-          console.warn('Auth user_metadata avatar update error:', authErr);
-        }
+    try {
+      // 1. Direct update to public.profiles table
+      const { data: updatedRows, error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', user.id)
+        .select();
 
-        // 3. Persist in public.profiles table (upsert to ensure the row exists)
-        const { error } = await supabase
+      if (profileError) {
+        console.error('Failed to update avatar in public.profiles:', profileError);
+        throw new Error(
+          profileError.message.includes('column') && profileError.message.includes('avatar_url')
+            ? 'Missing avatar_url column in Supabase profiles table. Please run the SQL migration in Supabase SQL Editor.'
+            : `Supabase database error: ${profileError.message}`
+        );
+      }
+
+      // If no existing row was updated, run safe upsert with required not-null fields
+      if (!updatedRows || updatedRows.length === 0) {
+        const { error: upsertError } = await supabase
           .from('profiles')
           .upsert(
             {
               id: user.id,
               email: user.email,
-              full_name: user.fullName,
+              full_name: user.fullName || 'Resident',
+              barangay: user.barangay || 'Central (Poblacion)',
+              phone: user.phone || null,
+              gender: user.gender || null,
+              birthdate: user.birthdate || null,
+              city: user.city || 'Mati City',
+              purok: user.purok || null,
+              role: user.role || 'resident',
+              verification_status: user.verificationStatus || 'unverified',
               avatar_url: avatarUrl,
               updated_at: new Date().toISOString(),
             },
             { onConflict: 'id' }
           );
 
-        if (error) {
-          console.warn('Could not update avatar in Supabase profiles:', error);
+        if (upsertError) {
+          console.error('Failed to upsert profile in Supabase:', upsertError);
+          throw new Error(`Supabase profile sync error: ${upsertError.message}`);
         }
-      } catch (err: any) {
-        console.warn('Avatar update error:', err);
-        return { error: err?.message || 'Avatar sync failed' };
       }
+
+      // 2. Persist in Supabase Auth user_metadata
+      try {
+        await supabase.auth.updateUser({
+          data: { avatar_url: avatarUrl, avatarUrl: avatarUrl },
+        });
+      } catch (authErr) {
+        console.warn('Auth user_metadata update warning:', authErr);
+      }
+
+      // 3. Update existing reports in public.reports table
+      try {
+        if (user.id) {
+          await supabase
+            .from('reports')
+            .update({ resident_avatar: avatarUrl })
+            .eq('user_id', user.id);
+        }
+        if (user.email) {
+          await supabase
+            .from('reports')
+            .update({ resident_avatar: avatarUrl })
+            .eq('resident_email', user.email);
+        }
+      } catch (repErr) {
+        console.warn('Reports avatar sync warning:', repErr);
+      }
+
+      // 4. Force reload fresh profile directly from Supabase database (clears any stale cache)
+      await fetchUserProfile(user.id, user.email || '');
+
+      return {};
+    } catch (err: any) {
+      console.error('updateAvatar critical failure:', err);
+      return { error: err?.message || 'Avatar sync failed in Supabase.' };
     }
-    return {};
   };
 
   const signIn = async (email: string, password: string): Promise<{ error?: string }> => {

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../lib/constants';
+import { THEME, getDefaultCitizenAvatar } from '../lib/constants';
 import { CivicReport } from '../types/report';
 import { parseReportImages } from '../screens/CreateReportModal';
 
@@ -252,6 +252,37 @@ export const ReportDetailsModal: React.FC<ReportDetailsModalProps> = ({
                 </View>
               </View>
             )}
+
+            {/* Citizen Reporter Profile */}
+            <View style={styles.divider} />
+            <Text style={styles.sectionHeading}>REPORTED BY CITIZEN</Text>
+            <View style={styles.reporterCard}>
+              <View style={styles.reporterAvatarBox}>
+                {report.resident_avatar || report.profiles?.avatar_url ? (
+                  <Image
+                    source={{ uri: report.resident_avatar || report.profiles?.avatar_url }}
+                    style={styles.reporterAvatarImg}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons name="person" size={22} color={THEME.colors.primary} />
+                )}
+              </View>
+              <View style={styles.reporterInfoCol}>
+                <View style={styles.reporterNameRow}>
+                  <Text style={styles.reporterNameText} numberOfLines={1}>
+                    {report.profiles?.full_name || report.resident_name || 'Verified Resident'}
+                  </Text>
+                  <View style={styles.residentVerifiedPill}>
+                    <Ionicons name="shield-checkmark" size={10} color="#059669" />
+                    <Text style={styles.residentVerifiedPillText}>Citizen</Text>
+                  </View>
+                </View>
+                <Text style={styles.reporterBarangayText}>
+                  Brgy. {report.barangay} • Mati City
+                </Text>
+              </View>
+            </View>
 
             {/* Location Details */}
             <View style={styles.divider} />
@@ -568,6 +599,81 @@ const styles = StyleSheet.create({
     color: '#1E3A8A',
     marginTop: 1,
     flexWrap: 'wrap',
+  },
+  reporterCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  reporterAvatarBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#BFDBFE',
+  },
+  reporterAvatarImg: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  reporterAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reporterAvatarInitials: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: THEME.colors.primary,
+  },
+  reporterInfoCol: {
+    flex: 1,
+    gap: 2,
+  },
+  reporterNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  reporterNameText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    flexShrink: 1,
+  },
+  residentVerifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  residentVerifiedPillText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#047857',
+  },
+  reporterBarangayText: {
+    fontSize: 11.5,
+    color: THEME.colors.textSecondary,
+    fontWeight: '600',
   },
   locationDetailsBox: {
     gap: 6,
