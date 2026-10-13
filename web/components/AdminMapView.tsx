@@ -62,6 +62,21 @@ const BARANGAY_FALLBACK_COORDINATES: Record<string, { lat: number; lng: number }
   'Libudon': { lat: 6.9400, lng: 126.2300 },
 };
 
+export function getBarangayCoords(barangayName?: string): { lat: number; lng: number } | null {
+  if (!barangayName) return null;
+  if (BARANGAY_FALLBACK_COORDINATES[barangayName]) {
+    return BARANGAY_FALLBACK_COORDINATES[barangayName];
+  }
+  const clean = barangayName.toLowerCase().replace(/^(brgy\.?|barangay)\s*/i, '').trim();
+  for (const [key, coords] of Object.entries(BARANGAY_FALLBACK_COORDINATES)) {
+    const keyClean = key.toLowerCase().replace(/^(brgy\.?|barangay)\s*/i, '').trim();
+    if (keyClean === clean || keyClean.includes(clean) || clean.includes(keyClean)) {
+      return coords;
+    }
+  }
+  return null;
+}
+
 export function getReportPinConfig(report: CivicReport) {
   const status = (report.status || '').toLowerCase().trim();
   const priority = (report.priority || '').toLowerCase().trim();
@@ -267,7 +282,33 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
       mapInstanceRef.current = map;
     }
 
+    const handleResize = () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    // Staggered invalidateSize passes to guarantee proper rendering on mobile/responsive devices
+    const t1 = setTimeout(handleResize, 150);
+    const t2 = setTimeout(handleResize, 450);
+    const t3 = setTimeout(handleResize, 1000);
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      ro = new ResizeObserver(() => {
+        handleResize();
+      });
+      ro.observe(mapContainerRef.current);
+    }
+
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      window.removeEventListener('resize', handleResize);
+      if (ro) ro.disconnect();
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -288,7 +329,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
       // Fallback to barangay coordinate if report coordinates are missing
       if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) {
-        const fb = BARANGAY_FALLBACK_COORDINATES[report.barangay || ''];
+        const fb = getBarangayCoords(report.barangay);
         if (fb) {
           lat = fb.lat;
           lng = fb.lng;
@@ -348,6 +389,11 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
       layer.addLayer(marker);
     });
+
+    // Invalidate size once markers layer is reloaded
+    setTimeout(() => {
+      mapInstanceRef.current?.invalidateSize();
+    }, 150);
   }, [filteredReports]);
 
   // Open Report Modal
@@ -399,9 +445,44 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
   // Recenter Map to City Hall
   const handleRecenterCityHall = () => {
-    mapInstanceRef.current?.setView([MATI_CITY_HALL_LAT, MATI_CITY_HALL_LNG], 14, {
-      animate: true,
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.invalidateSize();
+      mapInstanceRef.current.setView([MATI_CITY_HALL_LAT, MATI_CITY_HALL_LNG], 14, {
+        animate: true,
+      });
+    }
+  };
+
+  // Fit all reports on map
+  const handleFitAllReports = () => {
+    if (!mapInstanceRef.current) return;
+    mapInstanceRef.current.invalidateSize();
+    const bounds: L.LatLngTuple[] = [[MATI_CITY_HALL_LAT, MATI_CITY_HALL_LNG]];
+
+    filteredReports.forEach((r) => {
+      let lat = r.latitude != null ? Number(r.latitude) : NaN;
+      let lng = r.longitude != null ? Number(r.longitude) : NaN;
+      if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) {
+        const fb = getBarangayCoords(r.barangay);
+        if (fb) {
+          lat = fb.lat;
+          lng = fb.lng;
+        }
+      }
+      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+        bounds.push([lat, lng]);
+      }
     });
+
+    if (bounds.length > 1) {
+      mapInstanceRef.current.fitBounds(L.latLngBounds(bounds), {
+        padding: [50, 50],
+        maxZoom: 16,
+        animate: true,
+      });
+    } else {
+      mapInstanceRef.current.setView([MATI_CITY_HALL_LAT, MATI_CITY_HALL_LNG], 14, { animate: true });
+    }
   };
 
   // Focus on specific report
@@ -410,7 +491,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
     let lng = report.longitude != null ? Number(report.longitude) : NaN;
 
     if (isNaN(lat) || isNaN(lng)) {
-      const fb = BARANGAY_FALLBACK_COORDINATES[report.barangay || ''];
+      const fb = getBarangayCoords(report.barangay);
       if (fb) {
         lat = fb.lat;
         lng = fb.lng;
@@ -418,6 +499,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
     }
 
     if (!isNaN(lat) && !isNaN(lng)) {
+      mapInstanceRef.current?.invalidateSize();
       mapInstanceRef.current?.setView([lat, lng], 16, { animate: true });
     }
   };
@@ -713,6 +795,15 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
         {/* Right Tools: Recenter, Refresh, Legend Toggle */}
         <div className="flex items-center gap-2 pointer-events-auto bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/80">
+          <button
+            onClick={handleFitAllReports}
+            className="px-2.5 sm:px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-xs border border-emerald-200/60"
+            title="Auto-zoom and fit all incident reports on the map"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-emerald-700" />
+            <span className="hidden sm:inline">Fit All ({filteredReports.length})</span>
+          </button>
+
           <button
             onClick={handleRecenterCityHall}
             className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-extrabold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-xs border border-blue-200/60"

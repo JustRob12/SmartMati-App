@@ -294,7 +294,7 @@ export default function AdminPage() {
         console.warn('Error fetching reports from Supabase:', error);
       }
 
-      if (data && data.length > 0) {
+      if (data) {
         setReports(data);
       }
     } catch (err) {
