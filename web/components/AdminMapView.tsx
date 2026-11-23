@@ -152,6 +152,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | ReportStatus>('all');
   const [selectedBarangay, setSelectedBarangay] = useState('All');
   const [showLegend, setShowLegend] = useState(true);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   // Selected Report Modal state
   const [selectedReport, setSelectedReport] = useState<CivicReport | null>(null);
@@ -237,8 +238,11 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
       const map = L.map(mapContainerRef.current, {
         center: [MATI_CITY_HALL_LAT, MATI_CITY_HALL_LNG],
         zoom: 14,
-        zoomControl: true,
+        zoomControl: false,
       });
+
+      // Add zoom control at bottom-right to prevent overlap with top search hub
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
 
       // Standard High-Quality OpenStreetMap Tiles
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -666,173 +670,312 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
       `}</style>
 
       {/* ================= TOP COMMAND & FILTER BAR ================= */}
-      <div className="absolute top-3 left-3 right-3 z-1000 flex flex-wrap items-center justify-between gap-2.5 pointer-events-none">
-        {/* Left Filter & Search Hub */}
-        <div className="flex flex-wrap items-center gap-2 pointer-events-auto bg-white/95 backdrop-blur-md p-2 rounded-2xl shadow-xl border border-slate-200/80">
-          {/* Search Box */}
-          <div className="relative flex items-center">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+      <div className="absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 z-[30] flex flex-col gap-2 pointer-events-none">
+        {/* Main Controls Row */}
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2 pointer-events-auto bg-white/95 backdrop-blur-md p-1.5 sm:p-2 rounded-2xl shadow-xl border border-slate-200/80">
+          {/* Left: Search Box */}
+          <div className="relative flex items-center flex-1 min-w-[130px] max-w-xs sm:max-w-sm">
+            <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400 absolute left-2.5 sm:left-3 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search title, barangay, office..."
-              className="pl-9 pr-3 py-1.5 bg-slate-100/90 hover:bg-slate-100 focus:bg-white text-xs font-semibold text-slate-800 placeholder-slate-400 rounded-xl border border-transparent focus:border-blue-500 focus:outline-none transition-all w-48 sm:w-64"
+              placeholder="Search reports..."
+              className="w-full pl-8 sm:pl-9 pr-6 py-1 sm:py-1.5 bg-slate-100/90 hover:bg-slate-100 focus:bg-white text-xs font-semibold text-slate-800 placeholder-slate-400 rounded-xl border border-transparent focus:border-blue-500 focus:outline-none transition-all"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                className="absolute right-2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
               </button>
             )}
           </div>
 
-          <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+          {/* Desktop Middle: Priority Chips & Barangay */}
+          <div className="hidden lg:flex items-center gap-2">
+            <div className="h-5 w-px bg-slate-200" />
 
-          {/* Priority Quick Chips */}
-          <div className="flex items-center gap-1 overflow-x-auto max-w-full py-0.5">
-            <button
-              onClick={() => setPriorityFilter('all')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                priorityFilter === 'all'
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <span>All</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-200">
-                {stats.total}
-              </span>
-            </button>
+            {/* Priority Quick Chips */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPriorityFilter('all')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  priorityFilter === 'all'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <span>All</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-200">
+                  {stats.total}
+                </span>
+              </button>
 
-            {/* Red = High */}
-            <button
-              onClick={() => setPriorityFilter('high')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                priorityFilter === 'high'
-                  ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
-                  : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200/60'
-              }`}
-              title="High Priority Incident Hazards"
-            >
-              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              <span>High</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-700 text-white">
-                {stats.high}
-              </span>
-            </button>
+              <button
+                onClick={() => setPriorityFilter('high')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  priorityFilter === 'high'
+                    ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
+                    : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200/60'
+                }`}
+                title="High Priority Incident Hazards"
+              >
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span>High</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-700 text-white">
+                  {stats.high}
+                </span>
+              </button>
 
-            {/* Yellow = Normal */}
-            <button
-              onClick={() => setPriorityFilter('normal')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                priorityFilter === 'normal'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/30'
-                  : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200/60'
-              }`}
-              title="Normal Priority Community Works"
-            >
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
-              <span>Normal</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-600 text-white">
-                {stats.normal}
-              </span>
-            </button>
+              <button
+                onClick={() => setPriorityFilter('normal')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  priorityFilter === 'normal'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/30'
+                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200/60'
+                }`}
+                title="Normal Priority Community Works"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                <span>Normal</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-600 text-white">
+                  {stats.normal}
+                </span>
+              </button>
 
-            {/* Yellow = Minimal */}
-            <button
-              onClick={() => setPriorityFilter('minimal')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                priorityFilter === 'minimal'
-                  ? 'bg-yellow-400 text-slate-950 shadow-sm shadow-yellow-400/30'
-                  : 'bg-yellow-50 text-yellow-800 hover:bg-yellow-100 border border-yellow-200/60'
-              }`}
-              title="Minimal Priority Requests"
-            >
-              <span className="w-2 h-2 rounded-full bg-yellow-400" />
-              <span>Minimal</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-yellow-500 text-slate-950 font-bold">
-                {stats.minimal}
-              </span>
-            </button>
+              <button
+                onClick={() => setPriorityFilter('minimal')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  priorityFilter === 'minimal'
+                    ? 'bg-yellow-400 text-slate-950 shadow-sm shadow-yellow-400/30'
+                    : 'bg-yellow-50 text-yellow-800 hover:bg-yellow-100 border border-yellow-200/60'
+                }`}
+                title="Minimal Priority Requests"
+              >
+                <span className="w-2 h-2 rounded-full bg-yellow-400" />
+                <span>Minimal</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-yellow-500 text-slate-950 font-bold">
+                  {stats.minimal}
+                </span>
+              </button>
 
-            {/* Blue = Done */}
-            <button
-              onClick={() => setPriorityFilter('done')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                priorityFilter === 'done'
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
-                  : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200/60'
-              }`}
-              title="Resolved & Completed Reports"
+              <button
+                onClick={() => setPriorityFilter('done')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  priorityFilter === 'done'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
+                    : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200/60'
+                }`}
+                title="Resolved & Completed Reports"
+              >
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                <span>Done</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-700 text-white">
+                  {stats.done}
+                </span>
+              </button>
+            </div>
+
+            <div className="h-5 w-px bg-slate-200" />
+
+            {/* Barangay Dropdown */}
+            <select
+              value={selectedBarangay}
+              onChange={(e) => setSelectedBarangay(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-100 text-xs font-bold text-slate-700 rounded-xl border border-slate-200 hover:bg-slate-200/80 focus:outline-none cursor-pointer"
             >
-              <span className="w-2 h-2 rounded-full bg-blue-500" />
-              <span>Done</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-700 text-white">
-                {stats.done}
-              </span>
-            </button>
+              <option value="All">All Barangays ({uniqueBarangays.length})</option>
+              {uniqueBarangays.map((b) => (
+                <option key={b} value={b}>
+                  Brgy. {b}
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div className="h-5 w-px bg-slate-200 hidden md:block" />
-
-          {/* Barangay Dropdown */}
-          <select
-            value={selectedBarangay}
-            onChange={(e) => setSelectedBarangay(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-100 text-xs font-bold text-slate-700 rounded-xl border border-slate-200 hover:bg-slate-200/80 focus:outline-none cursor-pointer hidden lg:block"
-          >
-            <option value="All">All Barangays ({uniqueBarangays.length})</option>
-            {uniqueBarangays.map((b) => (
-              <option key={b} value={b}>
-                Brgy. {b}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Right Tools: Recenter, Refresh, Legend Toggle */}
-        <div className="flex items-center gap-2 pointer-events-auto bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-slate-200/80">
+          {/* Mobile Filter Toggle Button */}
           <button
-            onClick={handleFitAllReports}
-            className="px-2.5 sm:px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-xs border border-emerald-200/60"
-            title="Auto-zoom and fit all incident reports on the map"
-          >
-            <Maximize2 className="w-3.5 h-3.5 text-emerald-700" />
-            <span className="hidden sm:inline">Fit All ({filteredReports.length})</span>
-          </button>
-
-          <button
-            onClick={handleRecenterCityHall}
-            className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-extrabold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-xs border border-blue-200/60"
-            title="Recenter view to Mati City Hall"
-          >
-            <Navigation className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">City Hall</span>
-          </button>
-
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all cursor-pointer"
-              title="Refresh database records"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowLegend((prev) => !prev)}
-            className={`p-1.5 rounded-xl transition-all cursor-pointer ${
-              showLegend ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+            onClick={() => setMobileFiltersOpen((prev) => !prev)}
+            className={`lg:hidden px-2.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+              mobileFiltersOpen || priorityFilter !== 'all' || selectedBarangay !== 'All'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
             }`}
-            title="Toggle Map Legend"
+            title="Toggle Filter Options"
           >
-            <Layers className="w-4 h-4" />
+            <Filter className="w-3.5 h-3.5" />
+            <span className="text-[11px] font-bold">
+              {priorityFilter !== 'all' ? priorityFilter.toUpperCase() : 'Filter'}
+            </span>
+            {(priorityFilter !== 'all' || selectedBarangay !== 'All') && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            )}
           </button>
+
+          {/* Right Action Tools: Fit All, City Hall, Refresh, Legend Toggle */}
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            <button
+              onClick={handleFitAllReports}
+              className="px-2 sm:px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold text-xs rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-xs border border-emerald-200/60"
+              title="Auto-zoom and fit all incident reports on the map"
+            >
+              <Maximize2 className="w-3.5 h-3.5 text-emerald-700" />
+              <span className="hidden sm:inline">Fit All</span>
+              <span className="text-[10px] bg-emerald-200/80 text-emerald-900 px-1.5 py-0.2 rounded-full font-bold">
+                {filteredReports.length}
+              </span>
+            </button>
+
+            <button
+              onClick={handleRecenterCityHall}
+              className="px-2 sm:px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-extrabold text-xs rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-xs border border-blue-200/60"
+              title="Recenter view to Mati City Hall"
+            >
+              <Navigation className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">City Hall</span>
+            </button>
+
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all cursor-pointer"
+                title="Refresh database records"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowLegend((prev) => !prev)}
+              className={`p-1.5 rounded-xl transition-all cursor-pointer ${
+                showLegend ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+              title="Toggle Map Legend"
+            >
+              <Layers className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
+
+        {/* Mobile Dropdown Filters Panel (Only when mobileFiltersOpen is true) */}
+        {mobileFiltersOpen && (
+          <div className="lg:hidden pointer-events-auto bg-white/98 backdrop-blur-md p-3 rounded-2xl shadow-2xl border border-slate-200/90 flex flex-col gap-2.5 animate-fade-in max-w-full">
+            <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                <Filter className="w-3 h-3 text-blue-600" />
+                Filter Incidents
+              </span>
+              {(priorityFilter !== 'all' || selectedBarangay !== 'All' || searchQuery) && (
+                <button
+                  onClick={() => {
+                    setPriorityFilter('all');
+                    setSelectedBarangay('All');
+                    setSearchQuery('');
+                  }}
+                  className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                >
+                  Reset All Filters
+                </button>
+              )}
+            </div>
+
+            {/* Mobile Priority Chips */}
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+              <button
+                onClick={() => setPriorityFilter('all')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
+                  priorityFilter === 'all'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <span>All</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-200">
+                  {stats.total}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setPriorityFilter('high')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
+                  priorityFilter === 'high'
+                    ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
+                    : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200/60'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                <span>High</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-700 text-white">
+                  {stats.high}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setPriorityFilter('normal')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
+                  priorityFilter === 'normal'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/30'
+                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200/60'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>Normal</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-600 text-white">
+                  {stats.normal}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setPriorityFilter('minimal')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
+                  priorityFilter === 'minimal'
+                    ? 'bg-yellow-400 text-slate-950 shadow-sm shadow-yellow-400/30'
+                    : 'bg-yellow-50 text-yellow-800 hover:bg-yellow-100 border border-yellow-200/60'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                <span>Minimal</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-yellow-500 text-slate-950 font-bold">
+                  {stats.minimal}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setPriorityFilter('done')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
+                  priorityFilter === 'done'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
+                    : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200/60'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                <span>Done</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-700 text-white">
+                  {stats.done}
+                </span>
+              </button>
+            </div>
+
+            {/* Mobile Barangay Selector */}
+            <div className="flex items-center gap-2 pt-1">
+              <label className="text-[11px] font-bold text-slate-500 shrink-0">Barangay:</label>
+              <select
+                value={selectedBarangay}
+                onChange={(e) => setSelectedBarangay(e.target.value)}
+                className="flex-1 px-2.5 py-1.5 bg-slate-100 text-xs font-bold text-slate-700 rounded-xl border border-slate-200 focus:outline-none"
+              >
+                <option value="All">All 26 Barangays ({uniqueBarangays.length} active)</option>
+                {uniqueBarangays.map((b) => (
+                  <option key={b} value={b}>
+                    Brgy. {b}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ================= LEAFLET CONTAINER ================= */}
@@ -840,7 +983,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
       {/* ================= FLOATING MAP LEGEND HUD ================= */}
       {showLegend && (
-        <div className="absolute bottom-4 left-4 z-1000 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl shadow-2xl border border-slate-200/90 max-w-[280px] animate-fade-in text-slate-800">
+        <div className="absolute bottom-4 left-3 sm:left-4 z-[25] bg-white/95 backdrop-blur-md p-3 sm:p-3.5 rounded-2xl shadow-2xl border border-slate-200/90 max-w-[240px] sm:max-w-[280px] animate-fade-in text-slate-800">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2.5">
             <div className="flex items-center gap-1.5">
               <MapPin className="w-4 h-4 text-blue-600" />
@@ -914,7 +1057,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
       {/* ================= COMPREHENSIVE REPORT DETAILS MODAL ================= */}
       {selectedReport && (
-        <div className="fixed inset-0 z-2000 flex items-center justify-center p-3 sm:p-5 bg-slate-950/70 backdrop-blur-xs animate-fade-in">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-3 sm:p-5 bg-slate-950/70 backdrop-blur-xs animate-fade-in">
           <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
@@ -1204,7 +1347,7 @@ export const AdminMapView: React.FC<AdminMapViewProps> = ({
 
       {/* ================= FULL-SCREEN ZOOMABLE LIGHTBOX MODAL ================= */}
       {lightboxOpen && lightboxImages.length > 0 && (
-        <div className="fixed inset-0 z-3000 bg-slate-950/95 backdrop-blur-md flex flex-col justify-between animate-fade-in">
+        <div className="fixed inset-0 z-[10001] bg-slate-950/95 backdrop-blur-md flex flex-col justify-between animate-fade-in">
           {/* Lightbox Header */}
           <div className="p-4 flex items-center justify-between text-white border-b border-white/10 bg-slate-950/60">
             <div className="flex items-center gap-3">

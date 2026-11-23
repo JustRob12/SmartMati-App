@@ -9,11 +9,14 @@ import {
   ActivityIndicator,
   Platform,
   Modal,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../lib/constants';
+import * as ImagePicker from 'expo-image-picker';
+import { THEME, VALID_ID_TYPES } from '../lib/constants';
 import { useAuth } from '../contexts/AuthContext';
+import { DropdownModal } from '../components/DropdownModal';
 import {
   pickAvatarFromGallery,
   takeAvatarWithCamera,
@@ -38,6 +41,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
   const [photoOptionsVisible, setPhotoOptionsVisible] = useState(false);
   const [submittingVerification, setSubmittingVerification] = useState(false);
   const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
+
+  // Verification Documents Modal State
+  const [uploadModalVisible, setUploadModalVisible] = useState(false);
+  const [idType, setIdType] = useState(user?.idType || VALID_ID_TYPES[0]);
+  const [idTypeDropdownOpen, setIdTypeDropdownOpen] = useState(false);
+  const [idPhotoUri, setIdPhotoUri] = useState<string | null>(user?.idPhotoUrl || null);
+  const [residencyCertUri, setResidencyCertUri] = useState<string | null>(user?.residencyCertUrl || null);
+  const [uploadingDocs, setUploadingDocs] = useState(false);
 
   const verificationStatus = user?.verificationStatus || 'unverified';
   const isApproved = verificationStatus === 'approved';
@@ -115,63 +126,97 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
     }
   };
 
-  const handleRequestVerification = () => {
-    setDialogConfig({
-      visible: true,
-      type: 'confirm',
-      icon: 'shield-checkmark-outline',
-      title: 'Submit for Verification',
-      subtitle: 'City Government of Mati',
-      message:
-        'Submit your resident profile to City Hall administrators for verification? Approval enables full reporting and community advisory tools.',
-      confirmText: 'Confirm & Submit',
-      cancelText: 'Cancel',
-      details: [
-        { label: 'Resident', value: user?.fullName || 'Resident' },
-        { label: 'Barangay', value: user?.barangay || 'Central' },
-        { label: 'Review Time', value: 'Up to 2 Business Days' },
-      ],
-      onCancel: () => setDialogConfig(null),
-      onConfirm: async () => {
-        setDialogConfig(null);
-        setSubmittingVerification(true);
-        try {
-          const res = await requestVerification();
-          if (res.error) {
-            setDialogConfig({
-              visible: true,
-              type: 'error',
-              title: 'Submission Failed',
-              message: res.error,
-              confirmText: 'OK',
-              onConfirm: () => setDialogConfig(null),
-            });
-          } else {
-            setDialogConfig({
-              visible: true,
-              type: 'success',
-              title: 'Request Submitted ✨',
-              subtitle: 'Under Review',
-              message:
-                'Your resident verification has been submitted to Mati City Hall. Review turnaround is typically 1 to 2 business days.',
-              confirmText: 'Got It',
-              onConfirm: () => setDialogConfig(null),
-            });
-          }
-        } catch (e: any) {
-          setDialogConfig({
-            visible: true,
-            type: 'error',
-            title: 'Error',
-            message: e.message || 'Unable to submit verification request.',
-            confirmText: 'OK',
-            onConfirm: () => setDialogConfig(null),
-          });
-        } finally {
-          setSubmittingVerification(false);
+  const handlePickDocument = async (target: 'id' | 'residency', source: 'camera' | 'gallery') => {
+    try {
+      if (source === 'camera') {
+        const { granted } = await ImagePicker.requestCameraPermissionsAsync();
+        if (!granted) {
+          Alert.alert('Permission Required', 'Camera permission is required to capture your document.');
+          return;
         }
-      },
-    });
+        const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+        if (!result.canceled && result.assets && result.assets.length > 0) {
+          if (target === 'id') setIdPhotoUri(result.assets[0].uri);
+          else setResidencyCertUri(result.assets[0].uri);
+        }
+      } else {
+        const { granted } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!granted) {
+          Alert.alert('Permission Required', 'Photo library permission is required to select your document.');
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          quality: 0.8,
+        });
+        if (!result.canceled && result.assets && result.assets.length > 0) {
+          if (target === 'id') setIdPhotoUri(result.assets[0].uri);
+          else setResidencyCertUri(result.assets[0].uri);
+        }
+      }
+    } catch (err: any) {
+      console.warn('Doc picker error:', err);
+    }
+  };
+
+  const handleSubmitDocuments = async () => {
+    if (!idPhotoUri) {
+      Alert.alert('Document Required', 'Please attach a photo of your Valid Government ID.');
+      return;
+    }
+    if (!residencyCertUri) {
+      Alert.alert('Document Required', 'Please attach a photo of your Barangay Certificate of Residency.');
+      return;
+    }
+
+    setUploadingDocs(true);
+    try {
+      let finalIdPhotoUrl = idPhotoUri;
+      if (idPhotoUri.startsWith('file:') || idPhotoUri.startsWith('content:') || idPhotoUri.startsWith('ph:')) {
+        finalIdPhotoUrl = await uploadImageToCloudinary(idPhotoUri, 'smartmati_docs');
+      }
+
+      let finalResidencyCertUrl = residencyCertUri;
+      if (residencyCertUri.startsWith('file:') || residencyCertUri.startsWith('content:') || residencyCertUri.startsWith('ph:')) {
+        finalResidencyCertUrl = await uploadImageToCloudinary(residencyCertUri, 'smartmati_docs');
+      }
+
+      const res = await requestVerification({
+        idType,
+        idPhotoUrl: finalIdPhotoUrl,
+        residencyCertUrl: finalResidencyCertUrl,
+      });
+
+      if (res.error) throw new Error(res.error);
+
+      setUploadModalVisible(false);
+      setDialogConfig({
+        visible: true,
+        type: 'success',
+        icon: 'checkmark-circle',
+        title: 'Documents Submitted ✨',
+        subtitle: 'Under City Hall Admin Review',
+        message:
+          'Your Government ID and Barangay Certificate have been uploaded to Mati City Hall. Once reviewed and verified, civic report submissions and full services will be unlocked.',
+        details: [
+          { label: 'ID Type', value: idType },
+          { label: 'Barangay Certificate', value: 'Attached' },
+          { label: 'Turnaround', value: '1 to 2 Business Days' },
+          { label: 'Status', value: 'Pending Review' },
+        ],
+        confirmText: 'Got It',
+        onConfirm: () => setDialogConfig(null),
+      });
+    } catch (err: any) {
+      console.error('Document submission error:', err);
+      Alert.alert('Submission Error', err.message || 'Could not upload verification documents.');
+    } finally {
+      setUploadingDocs(false);
+    }
+  };
+
+  const handleRequestVerification = () => {
+    setUploadModalVisible(true);
   };
 
   const handleLogout = () => {
@@ -427,6 +472,71 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
           </View>
         </View>
 
+        {/* Verification Credentials Card */}
+        <View style={styles.infoCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={styles.cardHeaderTitle}>Verification Credentials</Text>
+            <View
+              style={[
+                styles.statusBadgeSmall,
+                isApproved
+                  ? styles.statusBadgeApproved
+                  : isPending
+                  ? styles.statusBadgePending
+                  : styles.statusBadgeUnverified,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.statusBadgeSmallText,
+                  isApproved
+                    ? { color: '#059669' }
+                    : isPending
+                    ? { color: '#D97706' }
+                    : { color: '#DC2626' },
+                ]}
+              >
+                {isApproved ? 'Verified' : isPending ? 'Pending Review' : 'Not Submitted'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconTag}>
+              <Ionicons name="card-outline" size={16} color={THEME.colors.primary} />
+            </View>
+            <View style={styles.infoTexts}>
+              <Text style={styles.infoLabel}>Government ID Type</Text>
+              <Text style={styles.infoValue}>{user?.idType || 'PhilID / Driver\'s License / UMID'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconTag}>
+              <Ionicons name="document-text-outline" size={16} color={THEME.colors.primary} />
+            </View>
+            <View style={styles.infoTexts}>
+              <Text style={styles.infoLabel}>Barangay Certificate</Text>
+              <Text style={styles.infoValue}>
+                {user?.residencyCertUrl ? 'Certificate Attached' : 'Certificate of Residency Required'}
+              </Text>
+            </View>
+          </View>
+
+          {!isApproved && (
+            <TouchableOpacity
+              style={styles.reUploadBtn}
+              onPress={() => setUploadModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="cloud-upload-outline" size={16} color={THEME.colors.primary} />
+              <Text style={styles.reUploadBtnText}>
+                {user?.idPhotoUrl ? 'Update Verification Documents' : 'Upload Verification Documents'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
         {/* Sign Out Button */}
         <TouchableOpacity
           style={styles.logoutButton}
@@ -494,6 +604,183 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onClose }) => {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* VERIFICATION DOCUMENTS UPLOAD MODAL */}
+      <Modal
+        visible={uploadModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setUploadModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalSafeArea} edges={['top', 'bottom']}>
+          <View style={styles.docModalHeader}>
+            <TouchableOpacity
+              onPress={() => setUploadModalVisible(false)}
+              style={styles.docModalCloseBtn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={22} color={THEME.colors.textPrimary} />
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={styles.docModalTitle}>Resident Verification</Text>
+              <Text style={styles.docModalSubtitle}>City Government of Mati</Text>
+            </View>
+            <View style={{ width: 36 }} />
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.docModalContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
+            {/* Guidance Banner */}
+            <View style={styles.docNoticeBox}>
+              <Ionicons name="shield-checkmark" size={20} color={THEME.colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.docNoticeTitle}>Official Verification Documents</Text>
+                <Text style={styles.docNoticeDesc}>
+                  Please provide a valid Government ID and your Barangay Certificate of Residency. These documents confirm genuine citizen identity to prevent fake accounts and maintain civic trust under RA 10173.
+                </Text>
+              </View>
+            </View>
+
+            {/* 1. ID Type Selection */}
+            <View style={styles.docCard}>
+              <Text style={styles.docLabel}>1. SELECT GOVERNMENT ID TYPE *</Text>
+              <TouchableOpacity
+                style={styles.idDropdownTrigger}
+                onPress={() => setIdTypeDropdownOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="card-outline" size={18} color={THEME.colors.primary} />
+                <Text style={styles.idDropdownText}>{idType}</Text>
+                <Ionicons name="chevron-down" size={18} color={THEME.colors.textMuted} />
+              </TouchableOpacity>
+
+              <DropdownModal
+                visible={idTypeDropdownOpen}
+                title="Select Valid Government ID"
+                options={VALID_ID_TYPES}
+                selectedValue={idType}
+                onSelect={(val) => {
+                  setIdType(val);
+                  setIdTypeDropdownOpen(false);
+                }}
+                onClose={() => setIdTypeDropdownOpen(false)}
+                searchable={false}
+              />
+            </View>
+
+            {/* 2. Government ID Photo Upload */}
+            <View style={styles.docCard}>
+              <Text style={styles.docLabel}>2. VALID GOVERNMENT ID PHOTO *</Text>
+              <Text style={styles.docSubLabel}>Clear front photo showing full name, photo, and signature</Text>
+
+              {idPhotoUri ? (
+                <View style={styles.docPreviewCard}>
+                  <Image source={{ uri: idPhotoUri }} style={styles.docPreviewImage} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={styles.removeDocBtn}
+                    onPress={() => setIdPhotoUri(null)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+                  </TouchableOpacity>
+                  <View style={styles.docAttachedTag}>
+                    <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                    <Text style={styles.docAttachedText}>ID Photo Attached</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.docActionRow}>
+                  <TouchableOpacity
+                    style={styles.docActionBtn}
+                    onPress={() => handlePickDocument('id', 'camera')}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="camera" size={20} color={THEME.colors.primary} />
+                    <Text style={styles.docActionBtnText}>Take Photo</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.docActionBtn}
+                    onPress={() => handlePickDocument('id', 'gallery')}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="images" size={20} color={THEME.colors.primary} />
+                    <Text style={styles.docActionBtnText}>Choose from Gallery</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            {/* 3. Barangay Residency Certificate Upload */}
+            <View style={styles.docCard}>
+              <Text style={styles.docLabel}>3. BARANGAY RESIDENCY CERTIFICATE *</Text>
+              <Text style={styles.docSubLabel}>Official certificate issued by your barangay hall</Text>
+
+              {residencyCertUri ? (
+                <View style={styles.docPreviewCard}>
+                  <Image source={{ uri: residencyCertUri }} style={styles.docPreviewImage} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={styles.removeDocBtn}
+                    onPress={() => setResidencyCertUri(null)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+                  </TouchableOpacity>
+                  <View style={styles.docAttachedTag}>
+                    <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                    <Text style={styles.docAttachedText}>Barangay Certificate Attached</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.docActionRow}>
+                  <TouchableOpacity
+                    style={styles.docActionBtn}
+                    onPress={() => handlePickDocument('residency', 'camera')}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="camera" size={20} color={THEME.colors.primary} />
+                    <Text style={styles.docActionBtnText}>Take Photo</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.docActionBtn}
+                    onPress={() => handlePickDocument('residency', 'gallery')}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="images" size={20} color={THEME.colors.primary} />
+                    <Text style={styles.docActionBtnText}>Choose from Gallery</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            {/* Submit Button */}
+            <TouchableOpacity
+              style={[
+                styles.submitDocBtn,
+                (!idPhotoUri || !residencyCertUri || uploadingDocs) && styles.submitDocBtnDisabled,
+              ]}
+              onPress={handleSubmitDocuments}
+              disabled={!idPhotoUri || !residencyCertUri || uploadingDocs}
+              activeOpacity={0.85}
+            >
+              {uploadingDocs ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <Text style={styles.submitDocBtnText}>Uploading Documents...</Text>
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="shield-checkmark" size={18} color="#FFFFFF" />
+                  <Text style={styles.submitDocBtnText}>Submit Documents for Verification</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
 
       {/* Confirmation & Alert Modals */}
@@ -850,5 +1137,224 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#475569',
+  },
+
+  // Document Verification Credentials & Modal Styles
+  statusBadgeSmall: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  statusBadgeApproved: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  statusBadgePending: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  statusBadgeUnverified: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  statusBadgeSmallText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  reUploadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 12,
+    paddingVertical: 10,
+    marginTop: 10,
+  },
+  reUploadBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+  },
+
+  modalSafeArea: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  docModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  docModalCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  docModalTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+  },
+  docModalSubtitle: {
+    fontSize: 11,
+    color: THEME.colors.textSecondary,
+    marginTop: 1,
+  },
+  docModalContent: {
+    padding: 16,
+    paddingBottom: 60,
+    gap: 14,
+  },
+  docNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 12,
+  },
+  docNoticeTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#1E40AF',
+  },
+  docNoticeDesc: {
+    fontSize: 11,
+    color: '#1E3A8A',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  docCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 6,
+  },
+  docLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+    letterSpacing: 0.5,
+  },
+  docSubLabel: {
+    fontSize: 10.5,
+    color: THEME.colors.textSecondary,
+    marginBottom: 4,
+  },
+  idDropdownTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  idDropdownText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+    flex: 1,
+    marginLeft: 8,
+  },
+  docActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  docActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+  docActionBtnText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+  },
+  docPreviewCard: {
+    position: 'relative',
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 4,
+  },
+  docPreviewImage: {
+    width: '100%',
+    height: 160,
+  },
+  removeDocBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 12,
+  },
+  docAttachedTag: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  docAttachedText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#059669',
+  },
+  submitDocBtn: {
+    backgroundColor: THEME.colors.primary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+    shadowColor: THEME.colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  submitDocBtnDisabled: {
+    backgroundColor: '#94A3B8',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  submitDocBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 });

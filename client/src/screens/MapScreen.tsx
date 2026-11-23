@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,12 +6,15 @@ import {
   StyleSheet,
   ActivityIndicator,
   Platform,
+  ScrollView,
+  Animated,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../lib/constants';
 import { supabase } from '../lib/supabase';
+import { MATI_BARANGAY_COORDINATES } from './CreateReportModal';
 
 // Default Mati City Hall Coordinates
 const MATI_LAT = 6.951882816297195;
@@ -221,17 +224,66 @@ const OPENFREEMAP_HTML = `
       .setPopup(cityHallPopup)
       .addTo(map);
 
-    // Issue Markers
+    // Issue Markers & Heatmap Data
     var markers = [];
     var currentIssues = ${JSON.stringify(DEFAULT_ISSUES)};
     var currentFilter = 'All';
+    var currentViewMode = 'pins';
     var userMarker = null;
+
+    function toGeoJson(issues) {
+      return {
+        type: 'FeatureCollection',
+        features: (issues || []).map(function(item) {
+          return {
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: [item.lng, item.lat]
+            },
+            properties: {
+              id: item.id,
+              category: item.category,
+              title: item.title,
+              barangay: item.barangay
+            }
+          };
+        })
+      };
+    }
+
+    function updateHeatmapSource(issues) {
+      var src = map.getSource('issues-heat-source');
+      if (src) {
+        src.setData(toGeoJson(issues));
+      }
+    }
+
+    function setViewMode(mode) {
+      currentViewMode = mode;
+      if (mode === 'heat') {
+        if (map.getLayer('issues-heat')) {
+          map.setLayoutProperty('issues-heat', 'visibility', 'visible');
+        }
+        markers.forEach(function(m) {
+          m.getElement().style.opacity = '0.35';
+        });
+      } else {
+        if (map.getLayer('issues-heat')) {
+          map.setLayoutProperty('issues-heat', 'visibility', 'none');
+        }
+        markers.forEach(function(m) {
+          m.getElement().style.opacity = '1.0';
+        });
+      }
+    }
 
     function renderMarkers(filter) {
       currentFilter = filter || currentFilter;
       markers.forEach(function(m) { m.remove(); });
       markers = [];
 
+      var filtered = [];
       currentIssues.forEach(function(item) {
         if (currentFilter !== 'All') {
           var match = (item.category || '').toLowerCase().indexOf(currentFilter.toLowerCase()) !== -1 ||
@@ -239,12 +291,18 @@ const OPENFREEMAP_HTML = `
           if (!match) return;
         }
 
+        filtered.push(item);
+
         var markerEl = document.createElement('div');
         markerEl.className = 'custom-marker';
         markerEl.style.backgroundColor = item.color || '#D97706';
         markerEl.style.width = '28px';
         markerEl.style.height = '28px';
         markerEl.style.fontSize = '12px';
+        markerEl.style.transition = 'opacity 0.25s ease';
+        if (currentViewMode === 'heat') {
+          markerEl.style.opacity = '0.35';
+        }
         markerEl.innerHTML = '📍';
 
         var popupHtml = '<div class="popup-card">' +
@@ -263,9 +321,57 @@ const OPENFREEMAP_HTML = `
 
         markers.push(m);
       });
+
+      updateHeatmapSource(filtered);
     }
 
     map.on('load', function() {
+      // Add GeoJSON Heatmap Source
+      map.addSource('issues-heat-source', {
+        type: 'geojson',
+        data: toGeoJson(currentIssues)
+      });
+
+      // Add MapLibre Native Heatmap Layer
+      map.addLayer({
+        id: 'issues-heat',
+        type: 'heatmap',
+        source: 'issues-heat-source',
+        maxzoom: 18,
+        paint: {
+          'heatmap-weight': 1,
+          'heatmap-intensity': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9, 1,
+            13, 2.5,
+            16, 4
+          ],
+          'heatmap-color': [
+            'interpolate',
+            ['linear'],
+            ['heatmap-density'],
+            0, 'rgba(33, 102, 172, 0)',
+            0.15, 'rgb(56, 189, 248)',
+            0.35, 'rgb(34, 197, 94)',
+            0.6, 'rgb(245, 158, 11)',
+            0.8, 'rgb(249, 115, 22)',
+            1, 'rgb(220, 38, 38)'
+          ],
+          'heatmap-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9, 15,
+            13, 30,
+            16, 50
+          ],
+          'heatmap-opacity': 0.85
+        }
+      });
+
+      map.setLayoutProperty('issues-heat', 'visibility', 'none');
       renderMarkers('All');
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_READY' }));
@@ -313,7 +419,16 @@ const OPENFREEMAP_HTML = `
           });
         } else if (data.type === 'SET_REPORTS') {
           currentIssues = data.reports;
+          updateHeatmapSource(currentIssues);
           renderMarkers(currentFilter);
+        } else if (data.type === 'SET_VIEW_MODE') {
+          setViewMode(data.mode);
+        } else if (data.type === 'FLY_TO_COORDS') {
+          map.flyTo({
+            center: [data.lng, data.lat],
+            zoom: data.zoom || 15.5,
+            essential: true
+          });
         }
       } catch (e) {}
     }
@@ -336,6 +451,8 @@ export const MapScreen: React.FC = () => {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsStatusText, setGpsStatusText] = useState<string | null>(null);
   const [reportsCount, setReportsCount] = useState(0);
+  const [allReports, setAllReports] = useState<any[]>(DEFAULT_ISSUES);
+  const [viewMode, setViewMode] = useState<'pins' | 'heat' | 'breakdown'>('pins');
 
   // Fetch approved reports and push to map
   useEffect(() => {
@@ -404,6 +521,7 @@ export const MapScreen: React.FC = () => {
         });
 
         setReportsCount(mappedReports.length);
+        setAllReports(mappedReports);
 
         if (mappedReports.length > 0) {
           webViewRef.current?.postMessage(
@@ -418,6 +536,32 @@ export const MapScreen: React.FC = () => {
       console.warn('Map reports error:', err);
     }
   };
+
+  const barangayDensity = useMemo(() => {
+    const counts: Record<
+      string,
+      { count: number; categories: Record<string, number>; lat: number; lng: number }
+    > = {};
+
+    allReports.forEach((rep) => {
+      const brgy = rep.barangay || 'Central (Poblacion)';
+      if (!counts[brgy]) {
+        const coords = MATI_BARANGAY_COORDINATES[brgy] || { lat: MATI_LAT, lng: MATI_LNG };
+        counts[brgy] = { count: 0, categories: {}, lat: coords.lat, lng: coords.lng };
+      }
+      counts[brgy].count += 1;
+
+      const catKey = (rep.category || 'Other').split(',')[0].trim();
+      counts[brgy].categories[catKey] = (counts[brgy].categories[catKey] || 0) + 1;
+    });
+
+    const list = Object.entries(counts).map(([name, data]) => ({
+      barangay: name,
+      ...data,
+    }));
+
+    return list.sort((a, b) => b.count - a.count);
+  }, [allReports]);
 
   const detectUserGPS = async () => {
     setLocating(true);
@@ -464,6 +608,27 @@ export const MapScreen: React.FC = () => {
     );
   };
 
+  const handleSelectViewMode = (mode: 'pins' | 'heat' | 'breakdown') => {
+    setViewMode(mode);
+    if (mode === 'pins' || mode === 'heat') {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'SET_VIEW_MODE', mode })
+      );
+    }
+  };
+
+  const handleFlyToBarangay = (lat: number, lng: number) => {
+    setViewMode('heat');
+    setTimeout(() => {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'SET_VIEW_MODE', mode: 'heat' })
+      );
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'FLY_TO_COORDS', lat, lng, zoom: 15.5 })
+      );
+    }, 200);
+  };
+
   const handleRecenterCity = () => {
     webViewRef.current?.postMessage(
       JSON.stringify({ type: 'RECENTER_CITY' })
@@ -484,150 +649,381 @@ export const MapScreen: React.FC = () => {
             })
           );
         }
+        if (viewMode === 'heat') {
+          webViewRef.current?.postMessage(
+            JSON.stringify({ type: 'SET_VIEW_MODE', mode: 'heat' })
+          );
+        }
       }
     } catch (e) {}
   };
 
   return (
     <View style={styles.fullScreenContainer}>
-      {/* Fullscreen OpenFreeMap Vector Map View */}
-      <WebView
-        ref={webViewRef}
-        originWhitelist={['*']}
-        source={{ html: OPENFREEMAP_HTML }}
-        style={styles.webView}
-        onMessage={handleWebViewMessage}
-        onLoadEnd={() => {
-          setLoading(false);
-          fetchApprovedReportsForMap();
-          if (userLocation) {
-            webViewRef.current?.postMessage(
-              JSON.stringify({
-                type: 'USER_LOCATION',
-                lat: userLocation.lat,
-                lng: userLocation.lng,
-              })
-            );
-          }
-        }}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        startInLoadingState={true}
-        renderLoading={() => (
-          <View style={styles.loaderCenter}>
-            <ActivityIndicator size="large" color={THEME.colors.primary} />
-            <Text style={styles.loaderText}>Loading Mati Vector Map (OpenFreeMap)...</Text>
-          </View>
-        )}
-      />
-
-      {/* Floating Top Filter Pills (Left Side) */}
-      <View style={styles.topFilterBar}>
-        {MAP_FILTERS.map((f) => {
-          const isSelected = f === selectedFilter;
-          return (
-            <TouchableOpacity
-              key={f}
-              style={[styles.filterChip, isSelected && styles.filterChipActive]}
-              onPress={() => handleSelectFilter(f)}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.filterChipText,
-                  isSelected && styles.filterChipTextActive,
-                ]}
-              >
-                {f}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* FLOATING LEGEND */}
-      <View style={styles.floatingLegendContainer}>
-        <TouchableOpacity
-          style={styles.legendCard}
-          onPress={() => setLegendCollapsed(!legendCollapsed)}
-          activeOpacity={0.9}
-        >
-          <View style={styles.legendHeaderRow}>
-            <View style={styles.legendTitleRow}>
-              <Ionicons name="map" size={13} color={THEME.colors.primary} />
-              <Text style={styles.legendTitle}>Map Legend</Text>
-            </View>
+      {/* 1. TOP VIEW MODE SWITCHER (Pins, Heatmap, Alternative Breakdown) */}
+      <View style={styles.viewModeHeaderContainer}>
+        <View style={styles.viewModeSwitcher}>
+          <TouchableOpacity
+            style={[styles.viewModeTab, viewMode === 'pins' && styles.viewModeTabActive]}
+            onPress={() => handleSelectViewMode('pins')}
+            activeOpacity={0.8}
+          >
             <Ionicons
-              name={legendCollapsed ? 'chevron-down' : 'chevron-up'}
+              name="location"
               size={14}
-              color={THEME.colors.textMuted}
+              color={viewMode === 'pins' ? '#FFFFFF' : THEME.colors.textSecondary}
             />
+            <Text style={[styles.viewModeTabText, viewMode === 'pins' && styles.viewModeTabTextActive]}>
+              Pins View
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.viewModeTab, viewMode === 'heat' && styles.viewModeTabActive]}
+            onPress={() => handleSelectViewMode('heat')}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="flame"
+              size={14}
+              color={viewMode === 'heat' ? '#FFFFFF' : '#EF4444'}
+            />
+            <Text style={[styles.viewModeTabText, viewMode === 'heat' && styles.viewModeTabTextActive]}>
+              Heatmap Map
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.viewModeTab, viewMode === 'breakdown' && styles.viewModeTabActive]}
+            onPress={() => handleSelectViewMode('breakdown')}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="stats-chart"
+              size={14}
+              color={viewMode === 'breakdown' ? '#FFFFFF' : THEME.colors.primary}
+            />
+            <Text style={[styles.viewModeTabText, viewMode === 'breakdown' && styles.viewModeTabTextActive]}>
+              Hotspots Breakdown
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* 2. ALTERNATIVE VIEW FOR HEATMAP: Ranked Hotspot Analysis & Breakdown */}
+      {viewMode === 'breakdown' ? (
+        <ScrollView style={styles.breakdownContainer} contentContainerStyle={styles.breakdownContent}>
+          {/* Header Card */}
+          <View style={styles.breakdownHeaderCard}>
+            <View style={styles.breakdownHeaderIcon}>
+              <Ionicons name="flame" size={24} color="#EF4444" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.breakdownHeaderTitle}>Mati Incident Hotspots & Density</Text>
+              <Text style={styles.breakdownHeaderSubtitle}>
+                Spatial cluster analysis of civic reports across Mati City barangays
+              </Text>
+            </View>
           </View>
 
-          {!legendCollapsed && (
-            <View style={styles.legendBody}>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#0284C7' }]} />
-                <Text style={styles.legendLabel}>My Location</Text>
+          {/* Quick Metrics KPI Row */}
+          <View style={styles.hotspotMetricsRow}>
+            <View style={styles.hotspotMetricCard}>
+              <Text style={styles.hotspotMetricValue}>{allReports.length}</Text>
+              <Text style={styles.hotspotMetricLabel}>Total Incidents</Text>
+            </View>
+            <View style={styles.hotspotMetricCard}>
+              <Text style={[styles.hotspotMetricValue, { color: '#EF4444' }]} numberOfLines={1}>
+                {barangayDensity[0]?.barangay || 'Central'}
+              </Text>
+              <Text style={styles.hotspotMetricLabel}>Top Hotspot</Text>
+            </View>
+            <View style={styles.hotspotMetricCard}>
+              <Text style={[styles.hotspotMetricValue, { color: '#D97706' }]}>
+                {barangayDensity.filter((b) => b.count >= 2).length}
+              </Text>
+              <Text style={styles.hotspotMetricLabel}>Active Clusters</Text>
+            </View>
+          </View>
+
+          {/* Heatmap Density Scale Card */}
+          <View style={styles.scaleCard}>
+            <View style={styles.scaleTitleRow}>
+              <Ionicons name="color-palette-outline" size={14} color={THEME.colors.primary} />
+              <Text style={styles.scaleCardTitle}>HEATMAP DENSITY SCALE</Text>
+            </View>
+            <View style={styles.scaleGradientBar}>
+              <View style={[styles.scaleStop, { backgroundColor: 'rgb(56, 189, 248)' }]} />
+              <View style={[styles.scaleStop, { backgroundColor: 'rgb(34, 197, 94)' }]} />
+              <View style={[styles.scaleStop, { backgroundColor: 'rgb(245, 158, 11)' }]} />
+              <View style={[styles.scaleStop, { backgroundColor: 'rgb(249, 115, 22)' }]} />
+              <View style={[styles.scaleStop, { backgroundColor: 'rgb(220, 38, 38)' }]} />
+            </View>
+            <View style={styles.scaleLabelsRow}>
+              <Text style={styles.scaleLabelText}>Low Density (1)</Text>
+              <Text style={styles.scaleLabelText}>Moderate (2-3)</Text>
+              <Text style={styles.scaleLabelText}>Critical Hotspot (4+)</Text>
+            </View>
+          </View>
+
+          {/* Ranked Barangay Hotspots List */}
+          <View style={styles.rankedListContainer}>
+            <View style={styles.rankedListHeaderRow}>
+              <Text style={styles.rankedListHeader}>BARANGAY RANKING BY INCIDENT DENSITY</Text>
+              <Text style={styles.rankedListCount}>{barangayDensity.length} Barangays</Text>
+            </View>
+
+            {barangayDensity.map((b, idx) => {
+              const maxCount = barangayDensity[0]?.count || 1;
+              const ratio = Math.min(b.count / maxCount, 1);
+              const isHigh = b.count >= 3;
+              const isMid = b.count === 2;
+              const color = isHigh ? '#DC2626' : isMid ? '#F59E0B' : '#0284C7';
+              const tierLabel = isHigh ? 'Critical Cluster' : isMid ? 'Moderate' : 'Low Density';
+
+              return (
+                <View key={b.barangay} style={styles.rankedBrgyCard}>
+                  <View style={styles.rankedBrgyTop}>
+                    <View style={styles.rankedBrgyTitleRow}>
+                      <View style={[styles.rankBadge, idx === 0 && styles.rankBadgeFirst]}>
+                        <Text style={[styles.rankBadgeText, idx === 0 && styles.rankBadgeTextFirst]}>
+                          #{idx + 1}
+                        </Text>
+                      </View>
+                      <View>
+                        <Text style={styles.rankedBrgyName}>Brgy. {b.barangay}</Text>
+                        <Text style={styles.rankedBrgyCoordText}>
+                          {b.lat.toFixed(4)}°N, {b.lng.toFixed(4)}°E • {tierLabel}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={[styles.incidentCountBadge, { backgroundColor: `${color}15`, borderColor: `${color}40` }]}>
+                      <Text style={[styles.incidentCountText, { color }]}>
+                        {b.count} {b.count === 1 ? 'Incident' : 'Incidents'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Intensity Progress Bar */}
+                  <View style={styles.progressBarTrack}>
+                    <View
+                      style={[
+                        styles.progressBarFill,
+                        {
+                          width: `${Math.round(ratio * 100)}%`,
+                          backgroundColor: color,
+                        },
+                      ]}
+                    />
+                  </View>
+
+                  {/* Categories Breakdown & Locate on Map Action */}
+                  <View style={styles.rankedBrgyBottomRow}>
+                    <View style={styles.catPillRow}>
+                      {Object.entries(b.categories).map(([cat, count]) => (
+                        <View key={cat} style={styles.catPill}>
+                          <Text style={styles.catPillText}>
+                            {cat}: {count}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.locateBtn}
+                      onPress={() => handleFlyToBarangay(b.lat, b.lng)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="map" size={12} color="#FFFFFF" />
+                      <Text style={styles.locateBtnText}>Locate on Map</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+      ) : (
+        /* 3. VECTOR MAP VIEW (WITH HEATMAP OR PINS) */
+        <>
+          <WebView
+            ref={webViewRef}
+            originWhitelist={['*']}
+            source={{ html: OPENFREEMAP_HTML }}
+            style={styles.webView}
+            onMessage={handleWebViewMessage}
+            onLoadEnd={() => {
+              setLoading(false);
+              fetchApprovedReportsForMap();
+              if (userLocation) {
+                webViewRef.current?.postMessage(
+                  JSON.stringify({
+                    type: 'USER_LOCATION',
+                    lat: userLocation.lat,
+                    lng: userLocation.lng,
+                  })
+                );
+              }
+              if (viewMode === 'heat') {
+                webViewRef.current?.postMessage(
+                  JSON.stringify({ type: 'SET_VIEW_MODE', mode: 'heat' })
+                );
+              }
+            }}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            startInLoadingState={true}
+            renderLoading={() => (
+              <View style={styles.loaderCenter}>
+                <ActivityIndicator size="large" color={THEME.colors.primary} />
+                <Text style={styles.loaderText}>Loading Mati Vector Map (OpenFreeMap)...</Text>
               </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#1E3A8A' }]} />
-                <Text style={styles.legendLabel}>City Hall</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#D97706' }]} />
-                <Text style={styles.legendLabel}>Road Hazard</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#F59E0B' }]} />
-                <Text style={styles.legendLabel}>Streetlight</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#059669' }]} />
-                <Text style={styles.legendLabel}>Sanitation</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.dot, { backgroundColor: '#DC2626' }]} />
-                <Text style={styles.legendLabel}>Safety & Floods</Text>
-              </View>
+            )}
+          />
+
+          {/* Floating Top Filter Pills (Left Side) */}
+          <View style={styles.topFilterBar}>
+            {MAP_FILTERS.map((f) => {
+              const isSelected = f === selectedFilter;
+              return (
+                <TouchableOpacity
+                  key={f}
+                  style={[styles.filterChip, isSelected && styles.filterChipActive]}
+                  onPress={() => handleSelectFilter(f)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      isSelected && styles.filterChipTextActive,
+                    ]}
+                  >
+                    {f}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Heatmap Active Overlay Indicator */}
+          {viewMode === 'heat' && (
+            <View style={styles.heatmapActiveBadge}>
+              <Ionicons name="flame" size={14} color="#EF4444" />
+              <Text style={styles.heatmapActiveText}>Heatmap Density Active</Text>
             </View>
           )}
-        </TouchableOpacity>
-      </View>
 
-      {/* Floating GPS Status Toast */}
-      {gpsStatusText && (
-        <View style={styles.gpsToast}>
-          <Ionicons name="navigate-circle" size={16} color={THEME.colors.primary} />
-          <Text style={styles.gpsToastText}>{gpsStatusText}</Text>
-        </View>
-      )}
+          {/* FLOATING LEGEND */}
+          <View style={styles.floatingLegendContainer}>
+            <TouchableOpacity
+              style={styles.legendCard}
+              onPress={() => setLegendCollapsed(!legendCollapsed)}
+              activeOpacity={0.9}
+            >
+              <View style={styles.legendHeaderRow}>
+                <View style={styles.legendTitleRow}>
+                  <Ionicons
+                    name={viewMode === 'heat' ? 'flame' : 'map'}
+                    size={13}
+                    color={viewMode === 'heat' ? '#EF4444' : THEME.colors.primary}
+                  />
+                  <Text style={styles.legendTitle}>
+                    {viewMode === 'heat' ? 'Heatmap' : 'Map Legend'}
+                  </Text>
+                </View>
+                <Ionicons
+                  name={legendCollapsed ? 'chevron-down' : 'chevron-up'}
+                  size={14}
+                  color={THEME.colors.textMuted}
+                />
+              </View>
 
-      {/* Floating Action Controls on Bottom-Right */}
-      <View style={styles.floatingActionGroup}>
-        {/* GPS Locate Me Button */}
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.gpsBtn]}
-          onPress={detectUserGPS}
-          disabled={locating}
-          activeOpacity={0.85}
-        >
-          {locating ? (
-            <ActivityIndicator size="small" color={THEME.colors.primary} />
-          ) : (
-            <Ionicons name="navigate" size={20} color={THEME.colors.primary} />
+              {!legendCollapsed && (
+                <View style={styles.legendBody}>
+                  {viewMode === 'heat' ? (
+                    <>
+                      <View style={styles.legendHeatRampRow}>
+                        <View style={[styles.heatRampBlock, { backgroundColor: 'rgb(56, 189, 248)' }]} />
+                        <View style={[styles.heatRampBlock, { backgroundColor: 'rgb(34, 197, 94)' }]} />
+                        <View style={[styles.heatRampBlock, { backgroundColor: 'rgb(245, 158, 11)' }]} />
+                        <View style={[styles.heatRampBlock, { backgroundColor: 'rgb(249, 115, 22)' }]} />
+                        <View style={[styles.heatRampBlock, { backgroundColor: 'rgb(220, 38, 38)' }]} />
+                      </View>
+                      <View style={styles.legendHeatLabelsRow}>
+                        <Text style={styles.legendHeatLabelText}>Low</Text>
+                        <Text style={styles.legendHeatLabelText}>Med</Text>
+                        <Text style={styles.legendHeatLabelText}>High</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#0284C7' }]} />
+                        <Text style={styles.legendLabel}>My Location</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#1E3A8A' }]} />
+                        <Text style={styles.legendLabel}>City Hall</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#D97706' }]} />
+                        <Text style={styles.legendLabel}>Road Hazard</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#F59E0B' }]} />
+                        <Text style={styles.legendLabel}>Streetlight</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#059669' }]} />
+                        <Text style={styles.legendLabel}>Sanitation</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.dot, { backgroundColor: '#DC2626' }]} />
+                        <Text style={styles.legendLabel}>Safety & Floods</Text>
+                      </View>
+                    </>
+                  )}
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Floating GPS Status Toast */}
+          {gpsStatusText && (
+            <View style={styles.gpsToast}>
+              <Ionicons name="navigate-circle" size={16} color={THEME.colors.primary} />
+              <Text style={styles.gpsToastText}>{gpsStatusText}</Text>
+            </View>
           )}
-        </TouchableOpacity>
 
-        {/* Recenter to Mati City Hall */}
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={handleRecenterCity}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="business-outline" size={20} color={THEME.colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
+          {/* Floating Action Controls on Bottom-Right */}
+          <View style={styles.floatingActionGroup}>
+            {/* GPS Locate Me Button */}
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.gpsBtn]}
+              onPress={detectUserGPS}
+              disabled={locating}
+              activeOpacity={0.85}
+            >
+              {locating ? (
+                <ActivityIndicator size="small" color={THEME.colors.primary} />
+              ) : (
+                <Ionicons name="navigate" size={20} color={THEME.colors.primary} />
+              )}
+            </TouchableOpacity>
+
+            {/* Recenter to Mati City Hall */}
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={handleRecenterCity}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="business-outline" size={20} color={THEME.colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
     </View>
   );
 };
@@ -656,9 +1052,305 @@ const styles = StyleSheet.create({
     color: THEME.colors.textSecondary,
     fontWeight: '600',
   },
+
+  // 1. Top View Mode Switcher
+  viewModeHeaderContainer: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    zIndex: 40,
+  },
+  viewModeSwitcher: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    borderRadius: 16,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  viewModeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 7,
+    borderRadius: 13,
+  },
+  viewModeTabActive: {
+    backgroundColor: THEME.colors.primary,
+    shadowColor: THEME.colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  viewModeTabText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: THEME.colors.textSecondary,
+  },
+  viewModeTabTextActive: {
+    color: '#FFFFFF',
+  },
+
+  // 2. Alternative View (Hotspots Breakdown)
+  breakdownContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingTop: 58,
+  },
+  breakdownContent: {
+    padding: 16,
+    paddingBottom: 110,
+    gap: 14,
+  },
+  breakdownHeaderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: THEME.colors.white,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  breakdownHeaderIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  breakdownHeaderTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+  },
+  breakdownHeaderSubtitle: {
+    fontSize: 11,
+    color: THEME.colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  hotspotMetricsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  hotspotMetricCard: {
+    flex: 1,
+    backgroundColor: THEME.colors.white,
+    borderRadius: 14,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  hotspotMetricValue: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+  },
+  hotspotMetricLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: THEME.colors.textMuted,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  scaleCard: {
+    backgroundColor: THEME.colors.white,
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 8,
+  },
+  scaleTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  scaleCardTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+    letterSpacing: 0.5,
+  },
+  scaleGradientBar: {
+    flexDirection: 'row',
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  scaleStop: {
+    flex: 1,
+  },
+  scaleLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  scaleLabelText: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: THEME.colors.textMuted,
+  },
+  rankedListContainer: {
+    gap: 10,
+  },
+  rankedListHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  rankedListHeader: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.textSecondary,
+    letterSpacing: 0.5,
+  },
+  rankedListCount: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: THEME.colors.primary,
+  },
+  rankedBrgyCard: {
+    backgroundColor: THEME.colors.white,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+    gap: 10,
+  },
+  rankedBrgyTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rankedBrgyTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  rankBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rankBadgeFirst: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  rankBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: THEME.colors.textSecondary,
+  },
+  rankBadgeTextFirst: {
+    color: '#DC2626',
+  },
+  rankedBrgyName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+  },
+  rankedBrgyCoordText: {
+    fontSize: 10,
+    color: THEME.colors.textMuted,
+    marginTop: 1,
+  },
+  incidentCountBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  incidentCountText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  progressBarTrack: {
+    height: 6,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  rankedBrgyBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  catPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    flex: 1,
+  },
+  catPill: {
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  catPillText: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: THEME.colors.textSecondary,
+  },
+  locateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: THEME.colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  locateBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+  // 3. Floating Filter Bar & Legend (On Map)
   topFilterBar: {
     position: 'absolute',
-    top: 14,
+    top: 58,
     left: 12,
     right: 145,
     flexDirection: 'row',
@@ -691,9 +1383,34 @@ const styles = StyleSheet.create({
   filterChipTextActive: {
     color: THEME.colors.white,
   },
+  heatmapActiveBadge: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 144 : 134,
+    left: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 25,
+  },
+  heatmapActiveText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
   floatingLegendContainer: {
     position: 'absolute',
-    top: 14,
+    top: 58,
     right: 12,
     width: 125,
     zIndex: 20,
@@ -731,6 +1448,26 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
     gap: 5,
+  },
+  legendHeatRampRow: {
+    flexDirection: 'row',
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  heatRampBlock: {
+    flex: 1,
+  },
+  legendHeatLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 3,
+  },
+  legendHeatLabelText: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    color: THEME.colors.textMuted,
   },
   legendItem: {
     flexDirection: 'row',

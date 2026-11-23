@@ -552,6 +552,59 @@ export const ApproveMembersView: React.FC<ApproveMembersViewProps> = ({
                     : `Brgy. ${selectedResident.barangay}, Mati City`}
                 </p>
               </div>
+
+              {/* Verification Documents Section */}
+              <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
+                <p className="text-blue-600 font-bold uppercase text-[10px] tracking-wider">
+                  Verification Credentials Submitted
+                </p>
+                <div className="flex items-center justify-between text-xs text-slate-700">
+                  <span className="text-slate-500">Government ID:</span>
+                  <span className="font-bold text-slate-900">{selectedResident.id_type || 'PhilID / Driver\'s License'}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  {selectedResident.id_photo_url ? (
+                    <a
+                      href={selectedResident.id_photo_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-2 bg-white rounded-lg border border-blue-200 text-center hover:bg-blue-50 transition cursor-pointer"
+                    >
+                      <img
+                        src={selectedResident.id_photo_url}
+                        alt="Gov ID"
+                        className="h-16 w-full object-cover rounded mb-1"
+                      />
+                      <span className="text-[10px] font-bold text-blue-600">🔍 View Gov ID</span>
+                    </a>
+                  ) : (
+                    <div className="p-2 bg-slate-100 rounded-lg text-center text-slate-400 text-[10px]">
+                      No ID Photo
+                    </div>
+                  )}
+
+                  {selectedResident.residency_cert_url ? (
+                    <a
+                      href={selectedResident.residency_cert_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-2 bg-white rounded-lg border border-blue-200 text-center hover:bg-blue-50 transition cursor-pointer"
+                    >
+                      <img
+                        src={selectedResident.residency_cert_url}
+                        alt="Residency Cert"
+                        className="h-16 w-full object-cover rounded mb-1"
+                      />
+                      <span className="text-[10px] font-bold text-blue-600">🔍 View Cert</span>
+                    </a>
+                  ) : (
+                    <div className="p-2 bg-slate-100 rounded-lg text-center text-slate-400 text-[10px]">
+                      No Residency Cert
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Modal Actions */}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
+  Animated,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +21,7 @@ import { RegisterModal } from './RegisterModal';
 import { ConfirmationModal, ConfirmationModalProps } from '../components/ConfirmationModal';
 import { THEME } from '../lib/constants';
 import { useAuth } from '../contexts/AuthContext';
+import { useKeyboard } from '../hooks/useKeyboard';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const isSmallScreen = SCREEN_HEIGHT < 700;
@@ -33,6 +36,30 @@ export const LoginScreen: React.FC = () => {
   const [registerVisible, setRegisterVisible] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
+
+  // Smooth Entry Animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
+
+  // Keyboard avoidance and auto-scroll
+  const scrollRef = useRef<ScrollView>(null);
+  const { keyboardVisible, keyboardHeight } = useKeyboard();
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        friction: 8,
+        tension: 50,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
 
   const validate = () => {
     const errs: { email?: string; password?: string } = {};
@@ -88,15 +115,22 @@ export const LoginScreen: React.FC = () => {
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
         style={styles.container}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          ref={scrollRef}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: keyboardVisible ? keyboardHeight + 40 : 50 },
+          ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           bounces={false}
         >
-          {/* Top Hero Banner (Compact & Responsive) */}
+          {/* Top Hero Banner with Standard Top Logo Placement */}
           <LinearGradient
             colors={[THEME.colors.primaryDark, THEME.colors.primary, '#1D4ED8']}
             style={[styles.heroBanner, isSmallScreen && styles.heroBannerSmall]}
@@ -106,6 +140,11 @@ export const LoginScreen: React.FC = () => {
             <View style={styles.glowCircle2} />
 
             <View style={styles.heroContent}>
+              {/* Official City Logo at TOP following standard layout conventions */}
+              <View style={styles.topLogoContainer}>
+                <CityLogo size={isSmallScreen ? 'sm' : 'md'} showSubtitle={false} />
+              </View>
+
               <Text style={styles.heroWelcome}>Welcome to</Text>
               <Text style={[styles.heroBrand, isSmallScreen && styles.heroBrandSmall]}>
                 <Text style={styles.heroBrandAccent}>Smart</Text>Mati
@@ -117,8 +156,17 @@ export const LoginScreen: React.FC = () => {
             </View>
           </LinearGradient>
 
-          {/* Login Card (Clean, Flat, Responsive - No Heavy Shadow) */}
-          <View style={[styles.loginCard, isSmallScreen && styles.loginCardSmall]}>
+          {/* Login Card with Smooth Slide/Fade Animation */}
+          <Animated.View
+            style={[
+              styles.loginCard,
+              isSmallScreen && styles.loginCardSmall,
+              {
+                opacity: fadeAnim,
+                transform: [{ translateY: slideAnim }],
+              },
+            ]}
+          >
             {/* Card Icon Header */}
             <View style={[styles.cardHeader, isSmallScreen && styles.cardHeaderSmall]}>
               <View style={[styles.shieldBadge, isSmallScreen && styles.shieldBadgeSmall]}>
@@ -146,6 +194,9 @@ export const LoginScreen: React.FC = () => {
                 setEmail(t);
                 if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }));
               }}
+              onFocus={() => {
+                scrollRef.current?.scrollTo({ y: isSmallScreen ? 90 : 70, animated: true });
+              }}
               keyboardType="email-address"
               autoCapitalize="none"
               error={errors.email}
@@ -162,10 +213,13 @@ export const LoginScreen: React.FC = () => {
                 setPassword(t);
                 if (errors.password) setErrors((prev) => ({ ...prev, password: undefined }));
               }}
+              onFocus={() => {
+                scrollRef.current?.scrollTo({ y: isSmallScreen ? 160 : 130, animated: true });
+              }}
               error={errors.password}
             />
 
-            {/* Remember Me Option (Forgot Password Removed to Save Space) */}
+            {/* Remember Me Option */}
             <View style={styles.optionsRow}>
               <TouchableOpacity
                 style={styles.rememberMeRow}
@@ -203,7 +257,7 @@ export const LoginScreen: React.FC = () => {
               )}
             </TouchableOpacity>
 
-            {/* Create Account as Clean Text Link (Saves Space) */}
+            {/* Create Account as Clean Text Link */}
             <View style={styles.registerRow}>
               <Text style={styles.registerPrompt}>Don't have an account? </Text>
               <TouchableOpacity
@@ -235,12 +289,7 @@ export const LoginScreen: React.FC = () => {
                 </Text>
               </TouchableOpacity>
             )}
-          </View>
-
-          {/* Bottom City of Mati Emblem */}
-          <View style={styles.bottomBrandSection}>
-            <CityLogo size="sm" showSubtitle />
-          </View>
+          </Animated.View>
         </ScrollView>
 
         {/* 3-Step Registration Stepper Modal */}
@@ -268,7 +317,21 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 16,
+    paddingBottom: 50,
+  },
+  topLogoContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
   },
   heroBanner: {
     paddingTop: 24,

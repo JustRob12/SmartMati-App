@@ -21,23 +21,103 @@ interface CustomInputProps extends TextInputProps {
   helperText?: string;
 }
 
-export const CustomInput: React.FC<CustomInputProps> = ({
-  label,
-  leadingIcon,
-  error,
-  isPassword = false,
-  disabled = false,
-  onPress,
-  required = false,
-  helperText,
-  value,
-  placeholder,
-  ...restProps
-}) => {
+export const CustomInput = React.forwardRef<TextInput, CustomInputProps>(
+  (props, ref) => {
+    const {
+      label,
+      leadingIcon,
+      error,
+      isPassword = false,
+      disabled = false,
+      onPress,
+      required = false,
+      helperText,
+      value,
+      placeholder,
+      ...restProps
+    } = props;
   const [isFocused, setIsFocused] = useState(false);
   const [showPassword, setShowPassword] = useState(!isPassword);
 
   const isClickable = Boolean(onPress);
+
+  const wrapperStyle = [
+    styles.inputWrapper,
+    isFocused && styles.inputWrapperFocused,
+    error ? styles.inputWrapperError : null,
+    disabled ? styles.inputWrapperDisabled : null,
+  ];
+
+  const renderInner = () => (
+    <>
+      {leadingIcon && (
+        <View style={styles.iconContainer}>
+          <Ionicons
+            name={leadingIcon}
+            size={18}
+            color={
+              error
+                ? THEME.colors.error
+                : isFocused
+                ? THEME.colors.primaryLight
+                : THEME.colors.textMuted
+            }
+          />
+        </View>
+      )}
+
+      {isClickable ? (
+        <Text
+          style={[
+            styles.input,
+            !value ? styles.placeholderText : styles.valueText,
+          ]}
+          numberOfLines={1}
+        >
+          {value || placeholder}
+        </Text>
+      ) : (
+        <TextInput
+          ref={ref}
+          style={styles.input}
+          placeholder={placeholder}
+          placeholderTextColor={THEME.colors.textMuted}
+          value={value}
+          secureTextEntry={isPassword && !showPassword}
+          onFocus={(e) => {
+            setIsFocused(true);
+            restProps.onFocus?.(e);
+          }}
+          onBlur={(e) => {
+            setIsFocused(false);
+            restProps.onBlur?.(e);
+          }}
+          editable={!disabled}
+          {...restProps}
+        />
+      )}
+
+      {isPassword && (
+        <TouchableOpacity
+          style={styles.rightIconButton}
+          onPress={() => setShowPassword(!showPassword)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons
+            name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+            size={18}
+            color={THEME.colors.textMuted}
+          />
+        </TouchableOpacity>
+      )}
+
+      {isClickable && !isPassword && (
+        <View style={styles.rightIconButton}>
+          <Ionicons name="chevron-down" size={16} color={THEME.colors.textMuted} />
+        </View>
+      )}
+    </>
+  );
 
   return (
     <View style={styles.container}>
@@ -48,76 +128,19 @@ export const CustomInput: React.FC<CustomInputProps> = ({
         </View>
       )}
 
-      <TouchableOpacity
-        activeOpacity={isClickable ? 0.7 : 1}
-        onPress={isClickable ? onPress : undefined}
-        style={[
-          styles.inputWrapper,
-          isFocused && styles.inputWrapperFocused,
-          error ? styles.inputWrapperError : null,
-          disabled ? styles.inputWrapperDisabled : null,
-        ]}
-      >
-        {leadingIcon && (
-          <View style={styles.iconContainer}>
-            <Ionicons
-              name={leadingIcon}
-              size={18}
-              color={
-                error
-                  ? THEME.colors.error
-                  : isFocused
-                  ? THEME.colors.primaryLight
-                  : THEME.colors.textMuted
-              }
-            />
-          </View>
-        )}
-
-        {isClickable ? (
-          <Text
-            style={[
-              styles.input,
-              !value ? styles.placeholderText : styles.valueText,
-            ]}
-            numberOfLines={1}
-          >
-            {value || placeholder}
-          </Text>
-        ) : (
-          <TextInput
-            style={styles.input}
-            placeholder={placeholder}
-            placeholderTextColor={THEME.colors.textMuted}
-            value={value}
-            secureTextEntry={isPassword && !showPassword}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            editable={!disabled}
-            {...restProps}
-          />
-        )}
-
-        {isPassword && (
-          <TouchableOpacity
-            style={styles.rightIconButton}
-            onPress={() => setShowPassword(!showPassword)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons
-              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-              size={18}
-              color={THEME.colors.textMuted}
-            />
-          </TouchableOpacity>
-        )}
-
-        {isClickable && !isPassword && (
-          <View style={styles.rightIconButton}>
-            <Ionicons name="chevron-down" size={16} color={THEME.colors.textMuted} />
-          </View>
-        )}
-      </TouchableOpacity>
+      {isClickable ? (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={onPress}
+          style={wrapperStyle}
+        >
+          {renderInner()}
+        </TouchableOpacity>
+      ) : (
+        <View style={wrapperStyle}>
+          {renderInner()}
+        </View>
+      )}
 
       {error ? (
         <View style={styles.errorRow}>
@@ -129,7 +152,9 @@ export const CustomInput: React.FC<CustomInputProps> = ({
       ) : null}
     </View>
   );
-};
+});
+
+CustomInput.displayName = 'CustomInput';
 
 const styles = StyleSheet.create({
   container: {

@@ -7,11 +7,13 @@ import {
   FlatList,
   StyleSheet,
   TextInput,
-  TouchableWithoutFeedback,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../lib/constants';
+import { useKeyboard } from '../hooks/useKeyboard';
 
 interface DropdownModalProps {
   visible: boolean;
@@ -35,6 +37,7 @@ export const DropdownModal: React.FC<DropdownModalProps> = ({
   searchable = true,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const { keyboardVisible, keyboardHeight } = useKeyboard();
 
   const filteredOptions = options.filter((item) =>
     item.toLowerCase().includes(searchQuery.toLowerCase().trim())
@@ -58,10 +61,28 @@ export const DropdownModal: React.FC<DropdownModalProps> = ({
       animationType="fade"
       onRequestClose={handleClose}
     >
-      <TouchableWithoutFeedback onPress={handleClose}>
-        <View style={styles.overlay}>
-          <TouchableWithoutFeedback>
-            <View style={styles.content}>
+      <View style={styles.overlay}>
+        {/* Backdrop: Tapping outside the sheet closes the modal */}
+        <TouchableOpacity
+          style={StyleSheet.absoluteFillObject}
+          activeOpacity={1}
+          onPress={handleClose}
+        />
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.keyboardAvoidingWrap}
+        >
+          <View
+            style={[
+              styles.content,
+              keyboardVisible && {
+                maxHeight: Math.max(280, SCREEN_HEIGHT - keyboardHeight - (Platform.OS === 'ios' ? 70 : 40)),
+                paddingBottom: Platform.OS === 'android' ? 16 : 24,
+              },
+              Platform.OS === 'android' && keyboardVisible ? { marginBottom: keyboardHeight } : null,
+            ]}
+          >
               {/* Drag Handle Indicator */}
               <View style={styles.dragHandleContainer}>
                 <View style={styles.dragHandle} />
@@ -182,9 +203,8 @@ export const DropdownModal: React.FC<DropdownModalProps> = ({
                 }
               />
             </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 };
@@ -193,6 +213,10 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'flex-end',
+  },
+  keyboardAvoidingWrap: {
+    width: '100%',
     justifyContent: 'flex-end',
   },
   content: {

@@ -10,8 +10,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   TextInput,
+  Image,
+  Animated,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { CustomInput } from '../components/CustomInput';
 import { DropdownModal } from '../components/DropdownModal';
 import { DatePickerModal } from '../components/DatePickerModal';
@@ -20,9 +24,11 @@ import { ConfirmationModal, ConfirmationModalProps } from '../components/Confirm
 import { CaptchaChallenge, generateCaptchaCode } from '../components/CaptchaChallenge';
 import { StepperIndicator } from '../components/StepperIndicator';
 import { CityLogo } from '../components/CityLogo';
-import { GENDERS, MATI_BARANGAYS, THEME } from '../lib/constants';
+import { GENDERS, MATI_BARANGAYS, THEME, VALID_ID_TYPES } from '../lib/constants';
 import { Barangay, Gender, RegisterFormData } from '../types/auth';
 import { useAuth } from '../contexts/AuthContext';
+import { uploadImageToCloudinary } from '../lib/cloudinary';
+import { useKeyboard } from '../hooks/useKeyboard';
 
 interface RegisterModalProps {
   visible: boolean;
@@ -40,6 +46,57 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
 
+  // Smooth Step Transition Animation
+  const stepFadeAnim = useRef(new Animated.Value(1)).current;
+  const stepSlideAnim = useRef(new Animated.Value(0)).current;
+
+  // Keyboard avoidance and auto-scroll
+  const scrollViewRef = useRef<ScrollView>(null);
+  const { keyboardVisible, keyboardHeight, keyboardAnim } = useKeyboard();
+
+  // Step 4 Layout Coordinates for CAPTCHA Auto-scroll
+  const [step4CardY, setStep4CardY] = useState(0);
+  const [captchaRelY, setCaptchaRelY] = useState(0);
+  const [captchaFocused, setCaptchaFocused] = useState(false);
+
+  const scrollToCaptcha = (animated = true) => {
+    const targetY = (step4CardY > 0 && captchaRelY > 0)
+      ? (step4CardY + captchaRelY - 12)
+      : 840;
+    scrollViewRef.current?.scrollTo({ y: Math.max(0, targetY), animated });
+  };
+
+  useEffect(() => {
+    if (step === 4 && captchaFocused) {
+      scrollToCaptcha(true);
+      const timer1 = setTimeout(() => scrollToCaptcha(true), 150);
+      const timer2 = setTimeout(() => scrollToCaptcha(true), 350);
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
+    }
+  }, [step, captchaFocused, keyboardVisible, keyboardHeight, step4CardY, captchaRelY]);
+
+  const animateToStep = (nextStep: number) => {
+    stepFadeAnim.setValue(0);
+    stepSlideAnim.setValue(18);
+    setStep(nextStep);
+    Animated.parallel([
+      Animated.timing(stepFadeAnim, {
+        toValue: 1,
+        duration: 280,
+        useNativeDriver: true,
+      }),
+      Animated.spring(stepSlideAnim, {
+        toValue: 0,
+        friction: 8,
+        tension: 60,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
   // Form State
   const [formData, setFormData] = useState<RegisterFormData>({
     fullName: '',
@@ -53,6 +110,10 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
     password: '',
     confirmPassword: '',
     agreeToTerms: false,
+    agreeToDataPrivacy: false,
+    idType: VALID_ID_TYPES[0],
+    idPhotoUrl: '',
+    residencyCertUrl: '',
   });
 
   // CAPTCHA State (Step 4)
@@ -60,7 +121,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   const [userCaptchaInput, setUserCaptchaInput] = useState('');
   const [captchaError, setCaptchaError] = useState('');
 
-  // Email OTP State (Step 5 if email confirmation required)
+  // Email OTP State (Step 5)
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
@@ -74,8 +135,11 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   // Sub-Modals
   const [genderModalVisible, setGenderModalVisible] = useState(false);
   const [barangayModalVisible, setBarangayModalVisible] = useState(false);
+  const [idTypeModalVisible, setIdTypeModalVisible] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [termsModalTab, setTermsModalTab] = useState<'terms' | 'privacy'>('privacy');
+  const [uploadingDoc, setUploadingDoc] = useState<'idPhotoUrl' | 'residencyCertUrl' | null>(null);
 
   // Custom Alert / Confirmation Dialog
   const [dialogConfig, setDialogConfig] = useState<ConfirmationModalProps | null>(null);
@@ -123,6 +187,57 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
     updateField('phone', cleaned);
   };
 
+  const handlePickDocument = async (
+    field: 'idPhotoUrl' | 'residencyCertUrl',
+    fromCamera: boolean
+  ) => {
+    try {
+      const permission = fromCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        setDialogConfig({
+          visible: true,
+          type: 'warning',
+          title: 'Permission Required',
+          message: `Please allow ${fromCamera ? 'camera' : 'photo library'} access in device settings to attach verification documents.`,
+          confirmText: 'OK',
+          onConfirm: () => setDialogConfig(null),
+        });
+        return;
+      }
+
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({ quality: 0.8 })
+        : await ImagePicker.launchImageLibraryAsync({ quality: 0.8, mediaTypes: ['images'] });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const localUri = result.assets[0].uri;
+        setUploadingDoc(field);
+        try {
+          const cloudUrl = await uploadImageToCloudinary(localUri, 'smartmati_verifications');
+          updateField(field, cloudUrl);
+        } catch (err: any) {
+          // Local fallback
+          updateField(field, localUri);
+        } finally {
+          setUploadingDoc(null);
+        }
+      }
+    } catch (err: any) {
+      setUploadingDoc(null);
+      setDialogConfig({
+        visible: true,
+        type: 'error',
+        title: 'Upload Error',
+        message: err.message || 'Could not attach document.',
+        confirmText: 'OK',
+        onConfirm: () => setDialogConfig(null),
+      });
+    }
+  };
+
   // Step Validations
   const validateStep1 = () => {
     const errs: Record<string, string> = {};
@@ -163,19 +278,35 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
   const validateStep3 = () => {
     const errs: Record<string, string> = {};
-    if (!formData.password) {
+    const pass = formData.password;
+
+    if (!pass) {
       errs.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      errs.password = 'Password must be at least 6 characters';
+    } else if (pass.length < 8) {
+      errs.password = 'Password must be at least 8 characters';
+    } else if (!/[A-Z]/.test(pass)) {
+      errs.password = 'Password must include at least one uppercase letter (A-Z)';
+    } else if (!/[a-z]/.test(pass)) {
+      errs.password = 'Password must include at least one lowercase letter (a-z)';
+    } else if (!/[0-9]/.test(pass)) {
+      errs.password = 'Password must include at least one number (0-9)';
+    } else if (!/[^A-Za-z0-9]/.test(pass)) {
+      errs.password = 'Password must include at least one special character (!@#$%^&*)';
     }
+
     if (!formData.confirmPassword) {
       errs.confirmPassword = 'Confirm your password';
     } else if (formData.password !== formData.confirmPassword) {
       errs.confirmPassword = 'Passwords do not match';
     }
+
     if (!formData.agreeToTerms) {
-      errs.agreeToTerms = 'You must agree to the Terms and Privacy Policy';
+      errs.agreeToTerms = 'You must agree to the Terms of Service';
     }
+    if (!formData.agreeToDataPrivacy) {
+      errs.agreeToDataPrivacy = 'You must agree to the Data Privacy Notice (RA 10173)';
+    }
+
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -196,20 +327,20 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
 
   const handleNext = () => {
     if (step === 1 && validateStep1()) {
-      setStep(2);
+      animateToStep(2);
     } else if (step === 2 && validateStep2()) {
-      setStep(3);
+      animateToStep(3);
     } else if (step === 3 && validateStep3()) {
-      setStep(4);
+      animateToStep(4);
       refreshCaptcha();
     }
   };
 
   const handleBack = () => {
     if (step > 1 && step <= 4) {
-      setStep(step - 1);
+      animateToStep(step - 1);
     } else if (step === 5) {
-      setStep(4);
+      animateToStep(4);
     }
   };
 
@@ -228,29 +359,15 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           confirmText: 'Try Again',
           onConfirm: () => setDialogConfig(null),
         });
-      } else if (res.requiresEmailConfirmation) {
-        // Transition to 6-digit Email OTP Verification
-        setStep(5);
+      } else {
+        // ALWAYS prompt 6-digit Email OTP Verification first to prevent fake/scam accounts
+        animateToStep(5);
         setResendCooldown(60);
         setOtpCode('');
         setOtpError('');
         setTimeout(() => {
           otpInputRef.current?.focus();
         }, 350);
-      } else {
-        setDialogConfig({
-          visible: true,
-          type: 'success',
-          title: 'Account Created! 🎉',
-          subtitle: 'Welcome to SmartMati',
-          message: 'Your resident account is ready. You can now log in and report community issues.',
-          confirmText: 'Get Started',
-          onConfirm: () => {
-            setDialogConfig(null);
-            handleResetAndClose();
-            onSuccess();
-          },
-        });
       }
     } catch (e: any) {
       setDialogConfig({
@@ -280,13 +397,15 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
       if (res.error) {
         setOtpError(res.error || 'Invalid code. Please check the 6-digit code sent to your email.');
       } else {
+        // Confirmed email! Do not auto-login or redirect straight to home screen.
         setDialogConfig({
           visible: true,
           type: 'success',
           title: 'Email Verified! ✨',
-          subtitle: 'Account Activated',
-          message: 'Your SmartMati resident account is now verified and active.',
-          confirmText: 'Go to Dashboard',
+          subtitle: 'Registration Submitted to City Hall',
+          message:
+            'Your email address has been confirmed! Your resident account registration is now queued for administrative review by the City Government of Mati. You can now log in with your credentials.',
+          confirmText: 'Proceed to Sign In',
           onConfirm: () => {
             setDialogConfig(null);
             handleResetAndClose();
@@ -361,6 +480,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
         style={styles.container}
       >
         {/* Top Header Bar */}
@@ -391,8 +511,18 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
         </View>
 
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          ref={scrollViewRef}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingBottom: keyboardVisible
+                ? (step === 4 ? keyboardHeight + 260 : keyboardHeight + 80)
+                : 40,
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           showsVerticalScrollIndicator={false}
         >
           {/* Brand Seal Header (Steps 1 to 4) */}
@@ -411,23 +541,26 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
             </>
           )}
 
-          {/* Step 1: Personal Info */}
-          {step === 1 && (
-            <View style={styles.stepCard}>
-              <View style={styles.stepCardHeader}>
-                <Ionicons name="person-circle-outline" size={20} color={THEME.colors.primary} />
-                <Text style={styles.stepCardTitle}>Personal Information</Text>
-              </View>
+              {/* Step 1: Personal Info */}
+              {step === 1 && (
+                <View style={styles.stepCard}>
+                  <View style={styles.stepCardHeader}>
+                    <Ionicons name="person-circle-outline" size={20} color={THEME.colors.primary} />
+                    <Text style={styles.stepCardTitle}>Personal Information</Text>
+                  </View>
 
-              <CustomInput
-                label="Full Name"
-                placeholder="e.g. Juan P. Dela Cruz"
-                leadingIcon="person-outline"
-                value={formData.fullName}
-                onChangeText={(t) => updateField('fullName', t)}
-                error={errors.fullName}
-                required
-              />
+                  <CustomInput
+                    label="Full Name"
+                    placeholder="e.g. Juan P. Dela Cruz"
+                    leadingIcon="person-outline"
+                    value={formData.fullName}
+                    onChangeText={(t) => updateField('fullName', t)}
+                    onFocus={() => {
+                      scrollViewRef.current?.scrollTo({ y: 40, animated: true });
+                    }}
+                    error={errors.fullName}
+                    required
+                  />
 
               <CustomInput
                 label="Gender"
@@ -456,6 +589,9 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 leadingIcon="call-outline"
                 value={formData.phone}
                 onChangeText={handlePhoneChange}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 220, animated: true });
+                }}
                 keyboardType="phone-pad"
                 maxLength={11}
                 error={errors.phone}
@@ -469,6 +605,9 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 leadingIcon="mail-outline"
                 value={formData.email}
                 onChangeText={(t) => updateField('email', t)}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 300, animated: true });
+                }}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 error={errors.email}
@@ -522,6 +661,9 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 leadingIcon="home-outline"
                 value={formData.purok}
                 onChangeText={(t) => updateField('purok', t)}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 160, animated: true });
+                }}
                 error={errors.purok}
                 helperText="Specific purok or neighborhood in your barangay"
                 required
@@ -529,24 +671,62 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
             </View>
           )}
 
-          {/* Step 3: Security & Terms */}
+          {/* Step 3: Security, Password Requirements & Data Privacy */}
           {step === 3 && (
-            <View style={styles.stepCard}>
+            <Animated.View
+              style={[
+                styles.stepCard,
+                { opacity: stepFadeAnim, transform: [{ translateY: stepSlideAnim }] },
+              ]}
+            >
               <View style={styles.stepCardHeader}>
                 <Ionicons name="lock-closed" size={20} color={THEME.colors.primary} />
-                <Text style={styles.stepCardTitle}>Account Security</Text>
+                <Text style={styles.stepCardTitle}>Account Security & Data Privacy</Text>
               </View>
 
               <CustomInput
                 label="Password"
-                placeholder="Create a strong password (min 6 chars)"
+                placeholder="Create a strong password (min 8 chars)"
                 leadingIcon="lock-closed-outline"
                 isPassword
                 value={formData.password}
                 onChangeText={(t) => updateField('password', t)}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 80, animated: true });
+                }}
                 error={errors.password}
                 required
               />
+
+              {/* Dynamic Live Password Conditions Checklist */}
+              <View style={styles.passwordConditionsBox}>
+                <Text style={styles.passwordConditionsTitle}>Password Requirements:</Text>
+                <View style={styles.passwordConditionsGrid}>
+                  {[
+                    { label: 'At least 8 characters', met: formData.password.length >= 8 },
+                    { label: 'One uppercase letter (A-Z)', met: /[A-Z]/.test(formData.password) },
+                    { label: 'One lowercase letter (a-z)', met: /[a-z]/.test(formData.password) },
+                    { label: 'One number (0-9)', met: /[0-9]/.test(formData.password) },
+                    { label: 'One special character (!@#$%^&*)', met: /[^A-Za-z0-9]/.test(formData.password) },
+                  ].map((item, idx) => (
+                    <View key={idx} style={styles.passwordConditionRow}>
+                      <Ionicons
+                        name={item.met ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={13}
+                        color={item.met ? THEME.colors.success : THEME.colors.textMuted}
+                      />
+                      <Text
+                        style={[
+                          styles.passwordConditionText,
+                          item.met && styles.passwordConditionTextMet,
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
 
               <CustomInput
                 label="Confirm Password"
@@ -555,11 +735,38 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 isPassword
                 value={formData.confirmPassword}
                 onChangeText={(t) => updateField('confirmPassword', t)}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 260, animated: true });
+                }}
                 error={errors.confirmPassword}
                 required
               />
 
-              {/* Terms & Conditions */}
+              {/* Data Privacy Notice Card (RA 10173) */}
+              <View style={styles.dataPrivacyCard}>
+                <View style={styles.dataPrivacyHeader}>
+                  <Ionicons name="shield-checkmark" size={17} color={THEME.colors.primary} />
+                  <Text style={styles.dataPrivacyTitle}>Data Privacy Agreement (RA 10173)</Text>
+                </View>
+                <Text style={styles.dataPrivacyText}>
+                  The City Government of Mati collects and processes your personal information exclusively for resident identity verification, emergency response, and municipal service dispatch. In compliance with the Philippine Data Privacy Act of 2012, your data is securely stored and never disclosed to unauthorized parties.
+                </Text>
+                <TouchableOpacity
+                  style={styles.dataPrivacyLinkRow}
+                  onPress={() => {
+                    setTermsModalTab('privacy');
+                    setTermsModalVisible(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="document-text-outline" size={13} color={THEME.colors.primary} />
+                  <Text style={styles.dataPrivacyLinkText}>
+                    Read Official Data Privacy Notice & Citizen Rights
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Checkbox 1: Terms of Service */}
               <TouchableOpacity
                 style={styles.checkboxContainer}
                 activeOpacity={0.8}
@@ -573,7 +780,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                   ]}
                 >
                   {formData.agreeToTerms && (
-                    <Ionicons name="checkmark" size={16} color={THEME.colors.white} />
+                    <Ionicons name="checkmark" size={15} color={THEME.colors.white} />
                   )}
                 </View>
                 <View style={{ flex: 1 }}>
@@ -581,33 +788,74 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                     I agree to the{' '}
                     <Text
                       style={styles.linkText}
-                      onPress={() => setTermsModalVisible(true)}
+                      onPress={() => {
+                        setTermsModalTab('terms');
+                        setTermsModalVisible(true);
+                      }}
                     >
                       Terms of Service
                     </Text>{' '}
-                    and{' '}
-                    <Text
-                      style={styles.linkText}
-                      onPress={() => setTermsModalVisible(true)}
-                    >
-                      Privacy Policy
-                    </Text>{' '}
-                    of Mati City.
+                    of Mati City Urban Services.
                   </Text>
                 </View>
               </TouchableOpacity>
               {errors.agreeToTerms && (
                 <Text style={styles.termsErrorText}>{errors.agreeToTerms}</Text>
               )}
-            </View>
+
+              {/* Checkbox 2: Data Privacy Act Consent */}
+              <TouchableOpacity
+                style={[styles.checkboxContainer, { marginTop: 4 }]}
+                activeOpacity={0.8}
+                onPress={() => updateField('agreeToDataPrivacy', !formData.agreeToDataPrivacy)}
+              >
+                <View
+                  style={[
+                    styles.checkboxBox,
+                    formData.agreeToDataPrivacy && styles.checkboxBoxChecked,
+                    errors.agreeToDataPrivacy ? styles.checkboxBoxError : null,
+                  ]}
+                >
+                  {formData.agreeToDataPrivacy && (
+                    <Ionicons name="checkmark" size={15} color={THEME.colors.white} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkboxLabel}>
+                    I acknowledge and agree to the{' '}
+                    <Text
+                      style={styles.linkText}
+                      onPress={() => {
+                        setTermsModalTab('privacy');
+                        setTermsModalVisible(true);
+                      }}
+                    >
+                      Data Privacy Agreement
+                    </Text>{' '}
+                    in accordance with RA 10173.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              {errors.agreeToDataPrivacy && (
+                <Text style={styles.termsErrorText}>{errors.agreeToDataPrivacy}</Text>
+              )}
+            </Animated.View>
           )}
 
           {/* Step 4: Resident Verification & Review */}
           {step === 4 && (
-            <View style={styles.stepCard}>
+            <Animated.View
+              style={[
+                styles.stepCard,
+                { opacity: stepFadeAnim, transform: [{ translateY: stepSlideAnim }] },
+              ]}
+              onLayout={(e) => {
+                setStep4CardY(e.nativeEvent.layout.y);
+              }}
+            >
               <View style={styles.stepCardHeader}>
                 <Ionicons name="shield-checkmark" size={20} color={THEME.colors.primary} />
-                <Text style={styles.stepCardTitle}>Review & Verification</Text>
+                <Text style={styles.stepCardTitle}>Review & Resident Verification</Text>
               </View>
 
               {/* Resident Summary Card */}
@@ -633,23 +881,174 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                 </View>
               </View>
 
+              {/* Resident Verification Document Attachments */}
+              <View style={styles.docsSection}>
+                <View style={styles.docsSectionHeader}>
+                  <Ionicons name="id-card-outline" size={18} color={THEME.colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.docsSectionTitle}>Resident Credentials (For City Hall Admin)</Text>
+                    <Text style={styles.docsSectionSubtitle}>
+                      Official verification grants authorization to submit community incident reports.
+                    </Text>
+                  </View>
+                </View>
+
+                {/* ID Type Selector */}
+                <CustomInput
+                  label="Select Government ID Type"
+                  placeholder="Choose valid ID type"
+                  leadingIcon="card-outline"
+                  value={formData.idType || VALID_ID_TYPES[0]}
+                  onPress={() => setIdTypeModalVisible(true)}
+                  helperText="Select the ID you will present to City Hall"
+                />
+
+                {/* Document 1: Government ID Photo */}
+                <View style={styles.docUploadBox}>
+                  <View style={styles.docUploadHeader}>
+                    <Text style={styles.docUploadTitle}>1. Valid Government-Issued ID Photo</Text>
+                    {Boolean(formData.idPhotoUrl) && (
+                      <View style={styles.attachedBadge}>
+                        <Ionicons name="checkmark-circle" size={12} color={THEME.colors.success} />
+                        <Text style={styles.attachedBadgeText}>Attached</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.docUploadDesc}>
+                    Photo of your PhilID, Driver's License, UMID, Passport, or Voter's ID.
+                  </Text>
+
+                  {formData.idPhotoUrl ? (
+                    <View style={styles.previewContainer}>
+                      <Image source={{ uri: formData.idPhotoUrl }} style={styles.previewImage} />
+                      <TouchableOpacity
+                        style={styles.changeDocBtn}
+                        onPress={() => handlePickDocument('idPhotoUrl', false)}
+                      >
+                        <Ionicons name="camera-reverse" size={14} color={THEME.colors.primary} />
+                        <Text style={styles.changeDocText}>Change Photo</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={styles.docActionBtnsRow}>
+                      <TouchableOpacity
+                        style={styles.docBtn}
+                        onPress={() => handlePickDocument('idPhotoUrl', true)}
+                        disabled={uploadingDoc === 'idPhotoUrl'}
+                      >
+                        {uploadingDoc === 'idPhotoUrl' ? (
+                          <ActivityIndicator size="small" color={THEME.colors.primary} />
+                        ) : (
+                          <>
+                            <Ionicons name="camera" size={15} color={THEME.colors.primary} />
+                            <Text style={styles.docBtnText}>Take Photo</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.docBtn, styles.docBtnSecondary]}
+                        onPress={() => handlePickDocument('idPhotoUrl', false)}
+                        disabled={uploadingDoc === 'idPhotoUrl'}
+                      >
+                        <Ionicons name="images-outline" size={15} color="#475569" />
+                        <Text style={styles.docBtnSecondaryText}>Choose from Gallery</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+
+                {/* Document 2: Barangay Certificate */}
+                <View style={[styles.docUploadBox, { marginTop: 10 }]}>
+                  <View style={styles.docUploadHeader}>
+                    <Text style={styles.docUploadTitle}>2. Barangay Residency Certificate</Text>
+                    {Boolean(formData.residencyCertUrl) && (
+                      <View style={styles.attachedBadge}>
+                        <Ionicons name="checkmark-circle" size={12} color={THEME.colors.success} />
+                        <Text style={styles.attachedBadgeText}>Attached</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.docUploadDesc}>
+                    Certificate of Residency from your Barangay Captain/Secretary.
+                  </Text>
+
+                  {formData.residencyCertUrl ? (
+                    <View style={styles.previewContainer}>
+                      <Image source={{ uri: formData.residencyCertUrl }} style={styles.previewImage} />
+                      <TouchableOpacity
+                        style={styles.changeDocBtn}
+                        onPress={() => handlePickDocument('residencyCertUrl', false)}
+                      >
+                        <Ionicons name="camera-reverse" size={14} color={THEME.colors.primary} />
+                        <Text style={styles.changeDocText}>Change Certificate</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={styles.docActionBtnsRow}>
+                      <TouchableOpacity
+                        style={styles.docBtn}
+                        onPress={() => handlePickDocument('residencyCertUrl', true)}
+                        disabled={uploadingDoc === 'residencyCertUrl'}
+                      >
+                        {uploadingDoc === 'residencyCertUrl' ? (
+                          <ActivityIndicator size="small" color={THEME.colors.primary} />
+                        ) : (
+                          <>
+                            <Ionicons name="camera" size={15} color={THEME.colors.primary} />
+                            <Text style={styles.docBtnText}>Take Photo</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.docBtn, styles.docBtnSecondary]}
+                        onPress={() => handlePickDocument('residencyCertUrl', false)}
+                        disabled={uploadingDoc === 'residencyCertUrl'}
+                      >
+                        <Ionicons name="images-outline" size={15} color="#475569" />
+                        <Text style={styles.docBtnSecondaryText}>Choose from Gallery</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+
               {/* Security CAPTCHA Challenge */}
-              <CaptchaChallenge
-                captchaCode={captchaCode}
-                value={userCaptchaInput}
-                onChangeText={(t) => {
-                  setUserCaptchaInput(t);
-                  if (captchaError) setCaptchaError('');
+              <View
+                onLayout={(e) => {
+                  setCaptchaRelY(e.nativeEvent.layout.y);
                 }}
-                error={captchaError}
-                onRefresh={refreshCaptcha}
-              />
-            </View>
+              >
+                <CaptchaChallenge
+                  captchaCode={captchaCode}
+                  value={userCaptchaInput}
+                  onChangeText={(t) => {
+                    setUserCaptchaInput(t);
+                    if (captchaError) setCaptchaError('');
+                  }}
+                  onFocus={() => {
+                    setCaptchaFocused(true);
+                    scrollToCaptcha(true);
+                  }}
+                  onBlur={() => {
+                    setCaptchaFocused(false);
+                  }}
+                  error={captchaError}
+                  onRefresh={refreshCaptcha}
+                />
+              </View>
+            </Animated.View>
           )}
 
-          {/* Step 5: Email 6-Digit OTP Verification (if required) */}
+          {/* Step 5: Email 6-Digit OTP Verification */}
           {step === 5 && (
-            <View style={styles.otpCard}>
+            <Animated.View
+              style={[
+                styles.otpCard,
+                { opacity: stepFadeAnim, transform: [{ translateY: stepSlideAnim }] },
+              ]}
+            >
               <View style={styles.otpIconBadge}>
                 <Ionicons name="mail-unread-outline" size={40} color={THEME.colors.primary} />
                 <View style={styles.otpKeyDot}>
@@ -703,6 +1102,9 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                   setOtpCode(cleaned);
                   if (otpError) setOtpError('');
                 }}
+                onFocus={() => {
+                  scrollViewRef.current?.scrollTo({ y: 100, animated: true });
+                }}
                 keyboardType="number-pad"
                 maxLength={6}
                 autoFocus
@@ -754,12 +1156,12 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
               {/* Change Email Button */}
               <TouchableOpacity
                 style={styles.changeEmailButton}
-                onPress={() => setStep(1)}
+                onPress={() => animateToStep(1)}
               >
                 <Ionicons name="pencil-outline" size={14} color={THEME.colors.textSecondary} />
                 <Text style={styles.changeEmailText}>Change email address</Text>
               </TouchableOpacity>
-            </View>
+            </Animated.View>
           )}
 
           {/* Action Buttons for Steps 1 to 4 */}
@@ -777,21 +1179,34 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
                   <Ionicons name="arrow-forward" size={18} color={THEME.colors.white} />
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity
-                  style={[styles.primaryButton, loading && styles.buttonDisabled]}
-                  onPress={handleSubmit}
-                  disabled={loading}
-                  activeOpacity={0.85}
-                >
-                  {loading ? (
-                    <ActivityIndicator color={THEME.colors.white} />
-                  ) : (
-                    <>
-                      <Ionicons name="person-add" size={18} color={THEME.colors.white} />
-                      <Text style={styles.primaryButtonText}>Create & Submit Account</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+                <>
+                  {/* Clarification Box for 'Submit Registration for Verification' */}
+                  <View style={styles.submitExplanationBox}>
+                    <Ionicons name="shield-checkmark" size={16} color={THEME.colors.primary} />
+                    <Text style={styles.submitExplanationText}>
+                      Submitting your registration creates your account credentials and forwards your resident profile to Mati City Hall administrators for official verification. Once verified, you will be authorized to submit community incident reports.
+                    </Text>
+                  </View>
+
+                  {/* Clarified Action Button */}
+                  <TouchableOpacity
+                    style={[styles.primaryButton, loading && styles.buttonDisabled]}
+                    onPress={handleSubmit}
+                    disabled={loading}
+                    activeOpacity={0.85}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color={THEME.colors.white} />
+                    ) : (
+                      <>
+                        <Ionicons name="shield-checkmark" size={18} color={THEME.colors.white} />
+                        <Text style={styles.primaryButtonText}>
+                          Submit Registration for Verification
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </>
               )}
 
               {step > 1 && (
@@ -843,8 +1258,22 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
           searchable={true}
         />
 
+        <DropdownModal
+          visible={idTypeModalVisible}
+          title="Select Government ID Type"
+          options={VALID_ID_TYPES}
+          selectedValue={formData.idType || VALID_ID_TYPES[0]}
+          onSelect={(val) => {
+            updateField('idType', val);
+            setIdTypeModalVisible(false);
+          }}
+          onClose={() => setIdTypeModalVisible(false)}
+          searchable={false}
+        />
+
         <TermsModal
           visible={termsModalVisible}
+          initialTab={termsModalTab}
           onClose={() => setTermsModalVisible(false)}
         />
 
@@ -888,7 +1317,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 40,
+    paddingBottom: 160,
   },
   headerHero: {
     alignItems: 'center',
@@ -1278,5 +1707,225 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: THEME.colors.textSecondary,
     fontWeight: '600',
+  },
+
+  // Password Requirements Styles
+  passwordConditionsBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: -8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  passwordConditionsTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  passwordConditionsGrid: {
+    gap: 4,
+  },
+  passwordConditionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  passwordConditionText: {
+    fontSize: 11,
+    color: THEME.colors.textMuted,
+    fontWeight: '500',
+  },
+  passwordConditionTextMet: {
+    color: THEME.colors.success,
+    fontWeight: '700',
+  },
+
+  // Data Privacy Notice Card Styles
+  dataPrivacyCard: {
+    backgroundColor: '#F0F9FF',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 6,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  dataPrivacyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 5,
+  },
+  dataPrivacyTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+  },
+  dataPrivacyText: {
+    fontSize: 11,
+    color: '#334155',
+    lineHeight: 16,
+  },
+  dataPrivacyLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+    paddingTop: 5,
+    borderTopWidth: 1,
+    borderTopColor: '#E0F2FE',
+  },
+  dataPrivacyLinkText: {
+    fontSize: 11,
+    color: THEME.colors.primary,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+
+  // Document Verification Styles
+  docsSection: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  docsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F6',
+  },
+  docsSectionTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: THEME.colors.primary,
+  },
+  docsSectionSubtitle: {
+    fontSize: 10.5,
+    color: THEME.colors.textSecondary,
+    marginTop: 1,
+  },
+  docUploadBox: {
+    backgroundColor: THEME.colors.white,
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  docUploadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 3,
+  },
+  docUploadTitle: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+  },
+  attachedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 3,
+  },
+  attachedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: THEME.colors.success,
+  },
+  docUploadDesc: {
+    fontSize: 10.5,
+    color: THEME.colors.textSecondary,
+    marginBottom: 8,
+  },
+  docActionBtnsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  docBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: THEME.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    gap: 6,
+  },
+  docBtnSecondary: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  docBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: THEME.colors.primary,
+  },
+  docBtnSecondaryText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  previewContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 6,
+  },
+  previewImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 6,
+    backgroundColor: '#E2E8F0',
+  },
+  changeDocBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  changeDocText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: THEME.colors.primary,
+  },
+
+  // Submit Explanation Note
+  submitExplanationBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#EFF6FF',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 8,
+    marginBottom: 4,
+  },
+  submitExplanationText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#1E3A8A',
+    lineHeight: 15,
   },
 });

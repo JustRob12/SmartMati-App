@@ -12,6 +12,9 @@ export interface ResidentProfile {
   purok?: string;
   role?: string;
   avatar_url?: string;
+  id_type?: string;
+  id_photo_url?: string;
+  residency_cert_url?: string;
   verification_status: VerificationStatus;
   verification_requested_at?: string;
   created_at?: string;

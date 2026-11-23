@@ -10,7 +10,11 @@ interface AuthContextType {
   signUp: (data: RegisterFormData) => Promise<{ error?: string; requiresEmailConfirmation?: boolean }>;
   verifyOtp: (email: string, token: string) => Promise<{ error?: string }>;
   resendOtp: (email: string) => Promise<{ error?: string }>;
-  requestVerification: () => Promise<{ error?: string }>;
+  requestVerification: (docs?: {
+    idType?: string;
+    idPhotoUrl?: string;
+    residencyCertUrl?: string;
+  }) => Promise<{ error?: string }>;
   refreshProfile: () => Promise<UserProfile | null>;
   updateAvatar: (avatarUrl: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
@@ -148,6 +152,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           avatarUrl: resolvedAvatar,
           verificationStatus: parsedStatus,
           verificationRequestedAt: data.verification_requested_at,
+          idType: data.id_type || data.idType,
+          idPhotoUrl: data.id_photo_url || data.idPhotoUrl,
+          residencyCertUrl: data.residency_cert_url || data.residencyCertUrl,
           createdAt: data.created_at,
         };
         setUser(profileObj);
@@ -195,25 +202,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return user;
   };
 
-  const requestVerification = async (): Promise<{ error?: string }> => {
+  const requestVerification = async (docs?: {
+    idType?: string;
+    idPhotoUrl?: string;
+    residencyCertUrl?: string;
+  }): Promise<{ error?: string }> => {
     if (!user) return { error: 'No active user found.' };
 
     const now = new Date().toISOString();
 
     if (!isSupabaseConfigured) {
       // Offline / Demo state update
-      setUser((prev) => (prev ? { ...prev, verificationStatus: 'pending', verificationRequestedAt: now } : null));
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              verificationStatus: 'pending',
+              verificationRequestedAt: now,
+              ...(docs?.idType ? { idType: docs.idType } : {}),
+              ...(docs?.idPhotoUrl ? { idPhotoUrl: docs.idPhotoUrl } : {}),
+              ...(docs?.residencyCertUrl ? { residencyCertUrl: docs.residencyCertUrl } : {}),
+            }
+          : null
+      );
       return {};
     }
 
     try {
       // 1. Update profiles table
+      const updatePayload: Record<string, any> = {
+        verification_status: 'pending',
+        verification_requested_at: now,
+      };
+      if (docs?.idType) updatePayload.id_type = docs.idType;
+      if (docs?.idPhotoUrl) updatePayload.id_photo_url = docs.idPhotoUrl;
+      if (docs?.residencyCertUrl) updatePayload.residency_cert_url = docs.residencyCertUrl;
+
       const { error: profileError } = await supabase
         .from('profiles')
-        .update({
-          verification_status: 'pending',
-          verification_requested_at: now,
-        })
+        .update(updatePayload)
         .eq('id', user.id);
 
       if (profileError) throw profileError;
@@ -228,6 +255,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: user.email,
           status: 'pending',
           requested_at: now,
+          id_type: docs?.idType || null,
+          id_photo_url: docs?.idPhotoUrl || null,
+          residency_cert_url: docs?.residencyCertUrl || null,
         });
       } catch (e) {
         // Safe skip if table optional
@@ -376,24 +406,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     data: RegisterFormData
   ): Promise<{ error?: string; requiresEmailConfirmation?: boolean }> => {
     if (!isSupabaseConfigured) {
-      // Demo / Mock sign up
-      setUser({
-        id: 'demo-user-' + Date.now(),
-        fullName: data.fullName,
-        gender: data.gender,
-        birthdate: data.birthdate,
-        phone: data.phone,
-        email: data.email,
-        city: 'Mati City',
-        barangay: data.barangay || 'Central (Poblacion)',
-        purok: data.purok,
-        role: 'resident',
-        verificationStatus: 'unverified',
-      });
-      return {};
+      // Demo / Mock sign up: DO NOT auto-login or redirect straight to home screen
+      // Prompt 6-digit OTP verification first to prevent fake/scam accounts
+      return { requiresEmailConfirmation: true };
     }
 
     try {
+      const now = new Date().toISOString();
       const { data: authData, error } = await supabase.auth.signUp({
         email: data.email.trim(),
         password: data.password,
@@ -406,7 +425,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             city: 'Mati City',
             barangay: data.barangay,
             purok: data.purok.trim(),
-            verification_status: 'unverified',
+            id_type: data.idType || null,
+            id_photo_url: data.idPhotoUrl || null,
+            residency_cert_url: data.residencyCertUrl || null,
+            verification_status: 'pending',
+            verification_requested_at: now,
           },
         },
       });
@@ -427,21 +450,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             barangay: data.barangay,
             purok: data.purok.trim(),
             role: 'resident',
-            verification_status: 'unverified',
+            verification_status: 'pending',
+            verification_requested_at: now,
+            id_type: data.idType || null,
+            id_photo_url: data.idPhotoUrl || null,
+            residency_cert_url: data.residencyCertUrl || null,
           });
         } catch (e) {
           // Trigger will handle it if present
         }
 
+        // Also insert into user_verifications log table
+        try {
+          await supabase.from('user_verifications').insert({
+            user_id: authData.user.id,
+            full_name: data.fullName.trim(),
+            barangay: data.barangay,
+            phone: data.phone.trim(),
+            email: data.email.trim(),
+            status: 'pending',
+            requested_at: now,
+            id_type: data.idType || null,
+            id_photo_url: data.idPhotoUrl || null,
+            residency_cert_url: data.residencyCertUrl || null,
+          });
+        } catch (_) {}
+
+        // Enforce OTP prompt and prevent instant auto-login
         if (authData.session) {
-          await fetchUserProfile(authData.user.id, authData.user.email || data.email);
-          return {};
-        } else {
-          return { requiresEmailConfirmation: true };
+          try {
+            await supabase.auth.signOut();
+          } catch (_) {}
+          setUser(null);
         }
+
+        return { requiresEmailConfirmation: true };
       }
 
-      return {};
+      return { requiresEmailConfirmation: true };
     } catch (err: any) {
       return { error: err?.message || 'An unexpected error occurred during registration.' };
     }
@@ -449,24 +495,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const verifyOtp = async (email: string, token: string): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured) {
-      setUser({
-        id: 'demo-verified-' + Date.now(),
-        fullName: 'Juan Dela Cruz',
-        gender: 'Male',
-        birthdate: '1995-06-15',
-        phone: '09171234567',
-        email: email || 'juan.delacruz@example.com',
-        city: 'Mati City',
-        barangay: 'Dahican',
-        purok: 'Purok 1',
-        role: 'resident',
-        verificationStatus: 'unverified',
-      });
+      if (token.trim().length !== 6) {
+        return { error: 'Please enter a valid 6-digit confirmation code.' };
+      }
+      // Demo OTP successfully validated
       return {};
     }
 
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
+      const { error } = await supabase.auth.verifyOtp({
         email: email.trim(),
         token: token.trim(),
         type: 'signup',
@@ -482,16 +519,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (secondTry.error) {
           return { error: error.message || secondTry.error.message };
         }
-
-        if (secondTry.data.user) {
-          await fetchUserProfile(secondTry.data.user.id, secondTry.data.user.email || email);
-        }
-        return {};
       }
 
-      if (data.user) {
-        await fetchUserProfile(data.user.id, data.user.email || email);
-      }
+      // Keep user signed out so they return to login screen or explicit review screen
+      try {
+        await supabase.auth.signOut();
+      } catch (_) {}
+      setUser(null);
 
       return {};
     } catch (err: any) {

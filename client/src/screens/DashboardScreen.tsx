@@ -244,6 +244,34 @@ export const DashboardScreen: React.FC = () => {
   const isApproved = verificationStatus === 'approved';
   const isPending = verificationStatus === 'pending';
 
+  const handleOpenCreateReport = () => {
+    if (!isApproved) {
+      setDialogConfig({
+        visible: true,
+        type: 'warning',
+        icon: 'shield-outline',
+        title: 'Resident Verification Required',
+        subtitle: isPending ? 'Account Under City Hall Review' : 'Read-Only Citizen Access',
+        message: isPending
+          ? 'Your resident registration and documents are currently being processed by Mati City Hall administrators. Once approved, report submission will be fully unlocked.'
+          : 'To prevent false reports and maintain verified civic accountability, Mati City Hall requires approved Government ID and Barangay Certificate verification before submitting reports.',
+        details: [
+          { label: 'Access Level', value: 'Read-Only (Feed & Map Accessible)' },
+          { label: 'Status', value: isPending ? 'Pending City Hall Review' : 'Unverified' },
+          { label: 'Required Documents', value: 'Valid Gov ID + Barangay Certificate' },
+        ],
+        confirmText: isPending ? 'Check Status' : 'Go to Profile & Submit Docs',
+        cancelText: 'Browse Feed',
+        onConfirm: () => {
+          setDialogConfig(null);
+          setProfileVisible(true);
+        },
+      });
+      return;
+    }
+    setReportModalVisible(true);
+  };
+
   const handleRequestVerification = () => {
     setDialogConfig({
       visible: true,
@@ -401,7 +429,7 @@ export const DashboardScreen: React.FC = () => {
               <View style={styles.heroActionBtnsRow}>
                 <TouchableOpacity
                   style={styles.heroPrimaryBtn}
-                  onPress={() => setReportModalVisible(true)}
+                  onPress={handleOpenCreateReport}
                   activeOpacity={0.85}
                 >
                   <Ionicons name="add-circle" size={18} color="#FFFFFF" />
@@ -447,7 +475,7 @@ export const DashboardScreen: React.FC = () => {
 
                 <TouchableOpacity
                   style={styles.verifyBannerBtn}
-                  onPress={isPending ? handleRefreshStatus : handleRequestVerification}
+                  onPress={isPending ? handleRefreshStatus : () => setProfileVisible(true)}
                   disabled={submittingVerification || refreshing}
                   activeOpacity={0.8}
                 >

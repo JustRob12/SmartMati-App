@@ -10,6 +10,10 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +28,7 @@ import { ConfirmationModal, ConfirmationModalProps } from '../components/Confirm
 import { DropdownModal } from '../components/DropdownModal';
 import { StepperIndicator, StepItem } from '../components/StepperIndicator';
 import { CivicReport } from '../types/report';
+import { useKeyboard } from '../hooks/useKeyboard';
 
 // Safe RFC4122 v4 UUID generator for React Native
 const generateUUID = (): string => {
@@ -277,10 +282,45 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
 }) => {
   const isEditing = !!editReport;
   const { user } = useAuth();
+  const isApproved = user?.verificationStatus === 'approved';
   const webViewRef = useRef<WebView>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const { keyboardVisible, keyboardHeight } = useKeyboard();
 
   // Active Step (1: Image, 2: Description & Location, 3: Category & Dispatch)
   const [currentStep, setCurrentStep] = useState<number>(1);
+  const stepFadeAnim = useRef(new Animated.Value(1)).current;
+  const stepSlideAnim = useRef(new Animated.Value(0)).current;
+
+  const animateToStep = (newStep: number) => {
+    Animated.parallel([
+      Animated.timing(stepFadeAnim, {
+        toValue: 0,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+      Animated.timing(stepSlideAnim, {
+        toValue: -12,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setCurrentStep(newStep);
+      stepSlideAnim.setValue(12);
+      Animated.parallel([
+        Animated.timing(stepFadeAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(stepSlideAnim, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
+  };
 
   // Step 1: Up to 4 Photos (REQUIRED: at least 1)
   const [imageUris, setImageUris] = useState<string[]>([]);
@@ -379,13 +419,32 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
     }
   }, [initialCategoryName, editReport]);
 
-  const resolveMatiStreetOnly = async (latitude: number, longitude: number) => {
+  const findClosestBarangay = (lat: number, lng: number): string => {
+    let closestName = 'Central (Poblacion)';
+    let minDistance = Infinity;
+
+    for (const [name, bCoords] of Object.entries(MATI_BARANGAY_COORDINATES)) {
+      const dLat = bCoords.lat - lat;
+      const dLng = bCoords.lng - lng;
+      const dist = dLat * dLat + dLng * dLng;
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestName = name;
+      }
+    }
+    return closestName;
+  };
+
+  const resolveMatiLocationDetails = async (latitude: number, longitude: number) => {
     let detectedStreet = '';
+    let detectedBarangay = '';
 
     try {
       const reverseResults = await Location.reverseGeocodeAsync({ latitude, longitude });
       if (reverseResults && reverseResults.length > 0) {
         const first = reverseResults[0];
+
+        // 1. Street / Landmark resolution
         if (first.street) {
           detectedStreet = first.street;
           if (first.name && first.name !== first.street && !first.street.includes(first.name)) {
@@ -396,12 +455,37 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
         } else if (first.formattedAddress) {
           detectedStreet = first.formattedAddress;
         }
+
+        // 2. Barangay resolution from geocode fields
+        const candidateFields = [
+          first.district,
+          first.subregion,
+          first.name,
+          first.street,
+        ].filter(Boolean) as string[];
+
+        for (const field of candidateFields) {
+          const matched = MATI_BARANGAYS.find(
+            (b) =>
+              field.toLowerCase().includes(b.toLowerCase()) ||
+              b.toLowerCase().includes(field.toLowerCase())
+          );
+          if (matched) {
+            detectedBarangay = matched;
+            break;
+          }
+        }
       }
     } catch (err) {
       console.warn('Reverse geocoding warning:', err);
     }
 
-    return detectedStreet;
+    // Proximity fallback if reverse geocode didn't match a barangay name
+    if (!detectedBarangay) {
+      detectedBarangay = findClosestBarangay(latitude, longitude);
+    }
+
+    return { street: detectedStreet, barangay: detectedBarangay };
   };
 
   const detectUserGPS = async () => {
@@ -423,14 +507,17 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
       const { latitude, longitude } = location.coords;
       setCoords({ latitude, longitude });
 
-      // Automatically display street or extension only
-      const street = await resolveMatiStreetOnly(latitude, longitude);
-      if (street) {
-        setAddressDetail(street);
+      // Automatically autofill all upper location fields: Barangay AND Street
+      const locationInfo = await resolveMatiLocationDetails(latitude, longitude);
+      if (locationInfo.street) {
+        setAddressDetail(locationInfo.street);
+      }
+      if (locationInfo.barangay) {
+        setSelectedBarangay(locationInfo.barangay);
       }
 
       setGpsSuccess(true);
-      setGpsStatusText(`${latitude.toFixed(5)}°N, ${longitude.toFixed(5)}°E`);
+      setGpsStatusText(`${latitude.toFixed(5)}°N, ${longitude.toFixed(5)}°E (Brgy. ${locationInfo.barangay})`);
     } catch (err: any) {
       console.warn('GPS detection failure:', err);
       setGpsStatusText('6.95188°N, 126.21634°E (Mati City)');
@@ -444,7 +531,6 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
   const handleSelectCustomBarangay = (brgyName: string) => {
     setSelectedBarangay(brgyName);
     setBarangayDropdownOpen(false);
-    // Note: Do NOT change coordinates or reposition the map
   };
 
   // Mini-map webview message handler (When user taps or drags pin on map)
@@ -454,10 +540,13 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
       if (data.type === 'PIN_MOVED' && data.lat && data.lng) {
         setCoords({ latitude: data.lat, longitude: data.lng });
 
-        // Automatically display street or extension only
-        const street = await resolveMatiStreetOnly(data.lat, data.lng);
-        if (street) {
-          setAddressDetail(street);
+        // Automatically autofill all upper location fields: Barangay AND Street
+        const locationInfo = await resolveMatiLocationDetails(data.lat, data.lng);
+        if (locationInfo.street) {
+          setAddressDetail(locationInfo.street);
+        }
+        if (locationInfo.barangay) {
+          setSelectedBarangay(locationInfo.barangay);
         }
       }
     } catch (e) {}
@@ -545,7 +634,7 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
       );
       return;
     }
-    setCurrentStep(2);
+    animateToStep(2);
   };
 
   // Step 2 -> Step 3
@@ -568,14 +657,22 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
       return;
     }
 
-    setCurrentStep(3);
+    animateToStep(3);
   };
 
   // Final Submit (Creates new or updates pending report)
   const handleSubmitReport = async () => {
+    if (!isApproved) {
+      Alert.alert(
+        'Verification Required',
+        'Your resident account must be verified and approved by Mati City Hall administrators before submitting civic reports. Unverified accounts have read-only access.'
+      );
+      return;
+    }
+
     if (imageUris.length === 0) {
       Alert.alert('Photo Required', 'Please attach at least one photo of the issue before submitting.');
-      setCurrentStep(1);
+      animateToStep(1);
       return;
     }
 
@@ -740,14 +837,50 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
         {/* Stepper Progress Indicator */}
         <StepperIndicator currentStep={currentStep} steps={REPORT_STEPS} />
 
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+        {/* Access Warning Banner for Unverified or Pending Users */}
+        {!isApproved && (
+          <View style={styles.accessWarningBanner}>
+            <Ionicons name="shield-outline" size={20} color="#DC2626" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.accessWarningTitle}>
+                {user?.verificationStatus === 'pending'
+                  ? 'Verification Pending Review'
+                  : 'Citizen Verification Required'}
+              </Text>
+              <Text style={styles.accessWarningDesc}>
+                {user?.verificationStatus === 'pending'
+                  ? 'Your identity documents are currently under review by City Hall administrators. Civic report submissions are unlocked once approved.'
+                  : 'Read-only access: You can browse public reports and map, but report submission requires approved Valid Gov ID and Barangay Certificate.'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+          style={{ flex: 1 }}
         >
-          {/* ================= STEP 1: IMAGE (REQUIRED) ================= */}
-          {currentStep === 1 && (
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.scroll}
+            contentContainerStyle={[
+              styles.scrollContent,
+              { paddingBottom: keyboardVisible ? keyboardHeight + 80 : 160 },
+            ]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          >
+            <Animated.View
+              style={{
+                opacity: stepFadeAnim,
+                transform: [{ translateY: stepSlideAnim }],
+              }}
+            >
+              {/* ================= STEP 1: IMAGE (REQUIRED) ================= */}
+              {currentStep === 1 && (
             <View style={styles.stepContainer}>
               <View style={styles.stepHeaderCard}>
                 <View style={styles.stepHeaderIconCircle}>
@@ -915,6 +1048,9 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
                     style={styles.textInput}
                     value={title}
                     onChangeText={setTitle}
+                    onFocus={() => {
+                      scrollViewRef.current?.scrollTo({ y: 60, animated: true });
+                    }}
                     placeholder="e.g. Deep pothole causing vehicular hazard"
                     placeholderTextColor={THEME.colors.textMuted}
                   />
@@ -926,6 +1062,9 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
                     style={[styles.textInput, styles.textArea]}
                     value={description}
                     onChangeText={setDescription}
+                    onFocus={() => {
+                      scrollViewRef.current?.scrollTo({ y: 160, animated: true });
+                    }}
                     placeholder="Describe the hazard level, exact landmark, and how long it has been present..."
                     placeholderTextColor={THEME.colors.textMuted}
                     multiline
@@ -942,12 +1081,17 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
                   <Text style={styles.sectionCardTitle}>BARANGAY & STREET / EXTENSION *</Text>
                 </View>
                 <Text style={styles.sectionHelp}>
-                  Select your barangay from the dropdown. The street/extension is automatically filled from your location pin.
+                  Barangay and Street / Landmark are automatically detected and autofilled from your GPS location or pin. You can also customize them manually.
                 </Text>
 
                 {/* Barangay Dropdown Button */}
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>BARANGAY *</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={styles.inputLabel}>BARANGAY *</Text>
+                    <Text style={{ fontSize: 10, color: THEME.colors.primary, fontWeight: '700' }}>
+                      Auto-detected from GPS / Pin
+                    </Text>
+                  </View>
                   <TouchableOpacity
                     style={styles.dropdownSelector}
                     onPress={() => setBarangayDropdownOpen(true)}
@@ -976,13 +1120,16 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.inputLabel}>STREET / EXTENSION / LANDMARK</Text>
                     <Text style={{ fontSize: 10, color: THEME.colors.primary, fontWeight: '700' }}>
-                      Auto-detected from map
+                      Auto-detected from GPS / Pin
                     </Text>
                   </View>
                   <TextInput
                     style={styles.textInput}
                     value={addressDetail}
                     onChangeText={setAddressDetail}
+                    onFocus={() => {
+                      scrollViewRef.current?.scrollTo({ y: 400, animated: true });
+                    }}
                     placeholder="e.g. Rizal Extension, Purok 3, Near City Hall..."
                     placeholderTextColor={THEME.colors.textMuted}
                   />
@@ -993,10 +1140,10 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
               <View style={styles.sectionCard}>
                 <View style={styles.sectionTitleRow}>
                   <Ionicons name="location" size={18} color={THEME.colors.primary} />
-                  <Text style={styles.sectionCardTitle}>LOCATION SELECTION (COORDINATES ONLY) *</Text>
+                  <Text style={styles.sectionCardTitle}>LOCATION SELECTION & INTERACTIVE MAP *</Text>
                 </View>
                 <Text style={styles.sectionHelp}>
-                  Choose your live GPS coordinates or interactively pan/zoom the mini-map to drop a pin.
+                  Choose your live GPS coordinates or interactively pan/zoom the mini-map to drop a pin. Upper location fields will automatically autofill.
                 </Text>
 
                 {/* 2 Option Toggle Tabs */}
@@ -1169,7 +1316,7 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
               <View style={styles.stepButtonsRow}>
                 <TouchableOpacity
                   style={styles.secondaryNavBtn}
-                  onPress={() => setCurrentStep(1)}
+                  onPress={() => animateToStep(1)}
                   activeOpacity={0.8}
                 >
                   <Ionicons name="arrow-back" size={16} color={THEME.colors.textPrimary} />
@@ -1282,7 +1429,7 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
               <View style={styles.stepButtonsRow}>
                 <TouchableOpacity
                   style={styles.secondaryNavBtn}
-                  onPress={() => setCurrentStep(2)}
+                  onPress={() => animateToStep(2)}
                   disabled={submitting}
                   activeOpacity={0.8}
                 >
@@ -1319,7 +1466,9 @@ export const CreateReportModal: React.FC<CreateReportModalProps> = ({
               </Text>
             </View>
           )}
-        </ScrollView>
+            </Animated.View>
+          </ScrollView>
+        </KeyboardAvoidingView>
 
         {/* Universal Confirmation Modal */}
         {dialogConfig && <ConfirmationModal {...dialogConfig} />}
@@ -1332,6 +1481,30 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  accessWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: 14,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    padding: 12,
+  },
+  accessWarningTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#991B1B',
+  },
+  accessWarningDesc: {
+    fontSize: 11,
+    color: '#B91C1C',
+    marginTop: 2,
+    lineHeight: 15,
   },
   header: {
     flexDirection: 'row',
@@ -1369,7 +1542,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 160,
   },
   stepContainer: {
     gap: 16,

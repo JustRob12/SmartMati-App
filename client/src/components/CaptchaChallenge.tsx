@@ -16,6 +16,8 @@ interface CaptchaChallengeProps {
   error?: string;
   onRefresh?: () => void;
   captchaCode: string;
+  onFocus?: () => void;
+  onBlur?: () => void;
 }
 
 const CHAR_COLORS = ['#1E3A8A', '#2563EB', '#D97706', '#0F172A', '#1D4ED8', '#B45309'];
@@ -37,6 +39,8 @@ export const CaptchaChallenge: React.FC<CaptchaChallengeProps> = ({
   error,
   onRefresh,
   captchaCode,
+  onFocus,
+  onBlur,
 }) => {
   return (
     <View style={styles.container}>
@@ -104,6 +108,8 @@ export const CaptchaChallenge: React.FC<CaptchaChallengeProps> = ({
           autoCapitalize="characters"
           autoCorrect={false}
           maxLength={6}
+          onFocus={onFocus}
+          onBlur={onBlur}
         />
         {value.length > 0 && (
           <TouchableOpacity

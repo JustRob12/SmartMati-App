@@ -31,6 +31,20 @@ export const MATI_BARANGAYS: Barangay[] = [
 
 export const GENDERS: Gender[] = ['Male', 'Female', 'Prefer not to say'];
 
+export const VALID_ID_TYPES = [
+  'Philippine National ID (PhilID / ePhilID)',
+  "Driver's License (LTO)",
+  'UMID (Unified Multi-Purpose ID)',
+  'Philippine Passport (DFA)',
+  "Voter's ID / Comelec Certification",
+  'Postal ID (PhilPost)',
+  'PRC ID (Professional Regulation Commission)',
+  'Senior Citizen / PWD ID',
+  'Barangay Resident ID Card',
+  'Student ID (Enrolled School)',
+];
+
+
 export const THEME = {
   colors: {
     // Primary Civic Blues

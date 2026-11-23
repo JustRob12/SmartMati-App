@@ -43,10 +43,16 @@ export interface RegisterFormData {
   barangay: Barangay | '';
   purok: string;
 
-  // Step 3: Security
+  // Step 3: Security & Consent
   password: string;
   confirmPassword: string;
   agreeToTerms: boolean;
+  agreeToDataPrivacy: boolean;
+
+  // Step 4: Verification Credentials
+  idType?: string;
+  idPhotoUrl?: string;
+  residencyCertUrl?: string;
 }
 
 export interface UserProfile {
@@ -63,5 +69,9 @@ export interface UserProfile {
   avatarUrl?: string;
   verificationStatus?: VerificationStatus;
   verificationRequestedAt?: string;
+  idType?: string;
+  idPhotoUrl?: string;
+  residencyCertUrl?: string;
   createdAt?: string;
 }
+

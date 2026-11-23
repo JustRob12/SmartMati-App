@@ -89,12 +89,12 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       {mobileOpen && (
         <div
           onClick={onCloseMobile}
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-40 lg:hidden animate-fade-in"
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-[9990] lg:hidden animate-fade-in"
         />
       )}
 
       <aside
-        className={`fixed lg:sticky top-0 bottom-0 left-0 w-64 bg-white flex flex-col justify-between border-r border-slate-200 shadow-sm shrink-0 h-screen z-50 transition-transform duration-300 ease-in-out ${
+        className={`fixed lg:sticky top-0 bottom-0 left-0 w-64 bg-white flex flex-col justify-between border-r border-slate-200 shadow-sm shrink-0 h-screen z-[9999] transition-transform duration-300 ease-in-out ${
           mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'
         }`}
       >
